@@ -4,7 +4,7 @@
 / {
 	compatible = "brcm,bcm2835";
 	fragment@0 {
-		target = <&i2c0if>;
+		target = <&i2c0>;
 		__overlay__ {
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -72,7 +72,7 @@
 				constant-charge-current-max-microamp = <2100000>;
 				voltage-max-design-microvolt = <4200000>;
 				re-charge-voltage-microvolt = <4000000>;
-				voltage-min-design-microvolt = <3300000>;
+				voltage-min-design-microvolt = <2900000>;
 				energy-full-design-microwatt-hours = <24790000>;
 				charge-full-design-microamp-hours = <6700000>;
 			};
@@ -114,19 +114,9 @@
 		};
 	};
 	fragment@4 {
-		target-path = "ethernet0";
+		target-path = <&rp1_eth>;
 		__overlay__ {
 			status = "disabled";
 		};
-	};
-	fragment@5 {
-		target = <&sdio1>;
-		__overlay__ {
-			sdhci,quirks2 = <0x400>; // SDHCI_QUIRK2_CLEAR_TRANSFERMODE_REG_BEFORE_CMD
-		};
-	};
-	__overrides__ {
-		cm5 = <0>,"-5";
-		cm5l = <0>,"+5";
 	};
 };
