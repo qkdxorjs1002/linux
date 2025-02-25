@@ -1,0 +1,132 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2835";
+	fragment@0 {
+		target = <&i2c0if>;
+		__overlay__ {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			pinctrl-0 = <&i2c0_pins>;
+			pinctrl-names = "default";
+			status = "okay";
+			axp22x: pmic@34 {
+				interrupt-controller;
+				#interrupt-cells = <1>;
+				compatible = "x-powers,axp221";
+				reg = <0x34>;
+				interrupt-parent = <&rp1_gpio>;
+				interrupts = <2 8>; /* Adjusted IRQ for RP1 */
+				irq-gpios = <&rp1_gpio 2 0>;
+				regulators {
+					x-powers,dcdc-freq = <3000>;
+					reg_aldo1: aldo1 {
+						regulator-always-on;
+						regulator-min-microvolt = <3300000>;
+						regulator-max-microvolt = <3300000>;
+						regulator-name = "audio-vdd";
+					};
+					reg_aldo2: aldo2 {
+						regulator-always-on;
+						regulator-min-microvolt = <3300000>;
+						regulator-max-microvolt = <3300000>;
+						regulator-name = "display-vcc";
+					};
+					reg_dldo2: dldo2 {
+						regulator-always-on;
+						regulator-min-microvolt = <3300000>;
+						regulator-max-microvolt = <3300000>;
+						regulator-name = "dldo2";
+					};
+					reg_dldo3: dldo3 {
+						regulator-always-on;
+						regulator-min-microvolt = <3300000>;
+						regulator-max-microvolt = <3300000>;
+						regulator-name = "dldo3";
+					};
+					reg_dldo4: dldo4 {
+						regulator-always-on;
+						regulator-min-microvolt = <3300000>;
+						regulator-max-microvolt = <3300000>;
+						regulator-name = "dldo4";
+					};
+				};
+				battery_power_supply: battery-power-supply {
+					compatible = "x-powers,axp221-battery-power-supply";
+					monitored-battery = <&battery>;
+				};
+
+				ac_power_supply: ac_power_supply {
+					compatible = "x-powers,axp221-ac-power-supply";
+				};
+			};
+		};
+	};
+	fragment@1 {
+		target-path = "/";
+		__overlay__  {
+			battery: battery@0 {
+				compatible = "simple-battery";
+				device-chemistry = "lithium-ion";
+				constant-charge-current-max-microamp = <2100000>;
+				voltage-max-design-microvolt = <4200000>;
+				re-charge-voltage-microvolt = <4000000>;
+				voltage-min-design-microvolt = <3300000>;
+				energy-full-design-microwatt-hours = <24790000>;
+				charge-full-design-microamp-hours = <6700000>;
+			};
+		};
+	};
+	fragment@2 {
+		target-path = "/";
+		__overlay__ {
+			ocp8178_backlight: backlight@0 {
+				compatible = "ocp8178-backlight";
+				backlight-control-gpios = <&rp1_gpio 9 0>;
+				default-brightness = <5>;
+			};
+		};
+	};
+	fragment@3 {
+		target = <&dsi1>; // dsi1 has iommu property
+		__overlay__ {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "okay";
+			port {
+				dsi_out_port: endpoint {
+					remote-endpoint = <&panel_dsi_port>;
+				};
+			};
+			panel_cwu50: panel@0 {
+				compatible = "cw,cwu50";
+				reg = <0>;
+				reset-gpio = <&rp1_gpio 8 1>;
+				backlight = <&ocp8178_backlight>;
+				rotation = <90>;
+				port {
+					panel_dsi_port: endpoint {
+						remote-endpoint = <&dsi_out_port>;
+					};
+				};
+			};
+		};
+	};
+	fragment@4 {
+		target-path = "ethernet0";
+		__overlay__ {
+			status = "disabled";
+		};
+	};
+	fragment@5 {
+		target = <&sdio1>;
+		__overlay__ {
+			sdhci,quirks2 = <0x400>; // SDHCI_QUIRK2_CLEAR_TRANSFERMODE_REG_BEFORE_CMD
+		};
+	};
+	__overrides__ {
+		cm5 = <0>,"-5";
+		cm5l = <0>,"+5";
+	};
+};
