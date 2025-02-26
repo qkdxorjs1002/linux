@@ -268,8 +268,8 @@ static void cwu50_init_sequence(struct cwu50 *ctx)
 static int cwu50_disable(struct drm_panel *panel)
 {
 	struct cwu50 *ctx = panel_to_cwu50(panel);
-	struct mipi_dsi_device *dsi = to_mipi_dsi_device(ctx->dev);
-	int ret;
+	// struct mipi_dsi_device *dsi = to_mipi_dsi_device(ctx->dev);
+	// int ret;
 
 	if (!ctx->enabled)
 		return 0;
@@ -311,13 +311,13 @@ static int cwu50_unprepare(struct drm_panel *panel)
 	ret = regulator_disable(ctx->vci);
 	if (ret) {
 		dev_err(ctx->dev, "failed to disable vci regulator (%d)\n",
-			err);
+			ret);
 		return ret;
 	}
 	ret = regulator_disable(ctx->vcc);
 	if (ret) {
 		dev_err(ctx->dev, "failed to disable vcc regulator (%d)\n",
-			err);
+			ret);
 		return ret;
 	}
 	msleep(20);
@@ -339,12 +339,12 @@ static int cwu50_prepare(struct drm_panel *panel)
 	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
 	ret = regulator_enable(ctx->vcc);
 	if (ret) {
-		dev_err(ctx->dev, "failed to enable vcc regulator (%d)\n", err);
+		dev_err(ctx->dev, "failed to enable vcc regulator (%d)\n", ret);
 		return ret;
 	}
 	ret = regulator_enable(ctx->vci);
 	if (ret) {
-		dev_err(ctx->dev, "failed to enable vci regulator (%d)\n", err);
+		dev_err(ctx->dev, "failed to enable vci regulator (%d)\n", ret);
 		return ret;
 	}
 	msleep(50);
