@@ -51,6 +51,12 @@
 						regulator-max-microvolt = <3300000>;
 						regulator-name = "dldo4";
 					};
+					reg_dcdc3: dcdc3 {
+						regulator-name = "sys-1v8";
+						regulator-always-on;
+						regulator-min-microvolt = <1800000>;
+						regulator-max-microvolt = <1800000>;
+					};
 				};
 				battery_power_supply: battery-power-supply {
 					compatible = "x-powers,axp221-battery-power-supply";
@@ -102,9 +108,11 @@
 			panel_cwu50: panel@0 {
 				compatible = "cw,cwu50";
 				reg = <0>;
-				reset-gpio = <&rp1_gpio 8 0>;
+				reset-gpio = <&rp1_gpio 8 1>;
 				backlight = <&ocp8178_backlight>;
 				rotation = <90>;
+				vci-supply = <&reg_dcdc3>;
+				vcc-supply = <&reg_aldo2>;
 				port {
 					panel_dsi_port: endpoint {
 						remote-endpoint = <&dsi_out_port>;
