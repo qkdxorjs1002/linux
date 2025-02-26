@@ -72,6 +72,9 @@
 				ac_power_supply: ac_power_supply {
 					compatible = "x-powers,axp221-ac-power-supply";
 				};
+				usb_power_supply: usb-power {
+					compatible = "x-powers,axp221-usb-power-supply";
+				};
 				axp_adc: adc {
 					compatible = "x-powers,axp221-adc";
 					#io-channel-cells = <1>;
@@ -105,6 +108,14 @@
 		};
 	};
 	fragment@2 {
+		target = <&i2c1>;
+		__overlay__ {
+			status = "okay";
+			pinctrl-0 = <&rp1_i2c1_2_3>;
+			clock-frequency = <100000>;
+		};
+	};
+	fragment@3 {
 		target-path = "/";
 		__overlay__ {
 			ocp8178_backlight: backlight@0 {
@@ -114,7 +125,7 @@
 			};
 		};
 	};
-	fragment@3 {
+	fragment@4 {
 		target = <&dsi1>; // dsi1 has iommu property
 		__overlay__ {
 			#address-cells = <1>;
