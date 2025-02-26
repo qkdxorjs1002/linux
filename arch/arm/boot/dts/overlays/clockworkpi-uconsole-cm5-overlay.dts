@@ -1,6 +1,8 @@
 /dts-v1/;
 /plugin/;
 
+#include <dt-bindings/gpio/gpio.h>
+
 / {
 	compatible = "brcm,bcm2835";
 	fragment@0 {
@@ -8,13 +10,18 @@
 		__overlay__ {
 			#address-cells = <1>;
 			#size-cells = <0>;
+			compatible = "i2c-gpio";
+			reg = <3>;
 			pinctrl-0 = <&i2c0_pins>;
 			pinctrl-names = "default";
+			gpios = <&rp1_gpio 0 (GPIO_ACTIVE_HIGH|GPIO_OPEN_DRAIN)
+					&rp1_gpio 1 (GPIO_ACTIVE_HIGH|GPIO_OPEN_DRAIN)>;
+			i2c-gpio,delay-us = <2>;
 			status = "okay";
 			axp22x: pmic@34 {
 				interrupt-controller;
 				#interrupt-cells = <1>;
-				compatible = "x-powers,axp221";
+				compatible = "x-powers,axp228", "x-powers,axp223", "x-powers,axp221";
 				reg = <0x34>;
 				interrupt-parent = <&rp1_gpio>;
 				interrupts = <2 8>; /* Adjusted IRQ for RP1 */
@@ -62,9 +69,22 @@
 					compatible = "x-powers,axp221-battery-power-supply";
 					monitored-battery = <&battery>;
 				};
-
 				ac_power_supply: ac_power_supply {
 					compatible = "x-powers,axp221-ac-power-supply";
+				};
+				axp_adc: adc {
+					compatible = "x-powers,axp221-adc";
+					#io-channel-cells = <1>;
+				};
+				axp_gpio: gpio {
+					compatible = "x-powers,axp221-gpio";
+					#gpio-cells = <2>;
+					gpio-controller;
+					status = "disabled";
+					gpio0_out: gpio0-out-pin {
+						pins = "GPIO0";
+						function = "gpio_out";
+					};
 				};
 			};
 		};
