@@ -113,10 +113,4 @@
 			};
 		};
 	};
-	fragment@4 {
-		target-path = <&rp1_eth>;
-		__overlay__ {
-			status = "disabled";
-		};
-	};
 };

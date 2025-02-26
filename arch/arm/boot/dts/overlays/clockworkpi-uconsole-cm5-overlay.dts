@@ -102,7 +102,7 @@
 			panel_cwu50: panel@0 {
 				compatible = "cw,cwu50";
 				reg = <0>;
-				reset-gpio = <&rp1_gpio 8 1>;
+				reset-gpio = <&rp1_gpio 8 0>;
 				backlight = <&ocp8178_backlight>;
 				rotation = <90>;
 				port {
@@ -111,12 +111,6 @@
 					};
 				};
 			};
-		};
-	};
-	fragment@4 {
-		target-path = <&rp1_eth>;
-		__overlay__ {
-			status = "disabled";
 		};
 	};
 };

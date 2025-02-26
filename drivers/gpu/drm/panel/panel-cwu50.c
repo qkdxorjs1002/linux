@@ -259,11 +259,6 @@ static void cwu50_init_sequence(struct cwu50 *ctx)
 	dcs_write_seq(0xE0, 0x00);
 	dcs_write_seq(0xE6, 0x02);
 	dcs_write_seq(0xE7, 0x02);
-	dcs_write_seq(0x11); // SLPOUT
-	msleep(200);
-	dcs_write_seq(0x29); // DSPON
-	msleep(50);
-	dcs_write_seq(0x35, 0x00);
 }
 
 static int cwu50_disable(struct drm_panel *panel)
@@ -288,7 +283,6 @@ static int cwu50_unprepare(struct drm_panel *panel)
 	struct mipi_dsi_device *dsi = to_mipi_dsi_device(ctx->dev);
 	int ret;
 
-#if 0
 	if (!ctx->prepared)
 		return 0;
 
@@ -303,13 +297,12 @@ static int cwu50_unprepare(struct drm_panel *panel)
 		dev_err(ctx->dev, "failed to enter sleep mode (%d)\n", ret);
 		return ret;
 	}
-	msleep(120);
+	msleep(150);
 
 	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
-	msleep(5);
+	msleep(20);
 
 	ctx->prepared = false;
-#endif
 
 	return 0;
 }
@@ -324,24 +317,16 @@ static int cwu50_prepare(struct drm_panel *panel)
 		return 0;
 
 	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
-	msleep(50);
+	msleep(20);
 	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
-	msleep(50);
+	msleep(20);
 	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
-	msleep(200);
+	msleep(50);
 
-	/* Enabe tearing mode: send TE (tearing effect) at VBLANK */
-	ret = mipi_dsi_dcs_set_tear_on(dsi, MIPI_DSI_DCS_TEAR_MODE_VBLANK);
-	if (ret) {
-		dev_err(ctx->dev, "failed to enable vblank TE (%d)\n", ret);
-		return ret;
-	}
-	/* Exit sleep mode and power on */
-
+	/* Send init commands */
 	cwu50_init_sequence(ctx);
 
-	msleep(100);
-
+	/* Exit sleep mode (SLPOUT)*/
 	int retries = 3;
 	do {
 		ret = mipi_dsi_dcs_exit_sleep_mode(dsi);
@@ -358,14 +343,23 @@ static int cwu50_prepare(struct drm_panel *panel)
 			"failed to exit sleep mode after retries (%d)\n", ret);
 		return ret;
 	}
-	msleep(100);
+	msleep(150); // tSLPOUT
 
+	/* Enabe tearing mode: send TE (tearing effect) at VBLANK */
+	ret = mipi_dsi_dcs_set_tear_on(dsi, MIPI_DSI_DCS_TEAR_MODE_VBLANK);
+	if (ret) {
+		dev_err(ctx->dev, "failed to enable vblank TE (%d)\n", ret);
+		return ret;
+	}
+	msleep(50);
+
+	/* Display on (DISON) */
 	ret = mipi_dsi_dcs_set_display_on(dsi);
 	if (ret) {
 		dev_err(ctx->dev, "failed to turn display on (%d)\n", ret);
 		return ret;
 	}
-	msleep(100);
+	msleep(50); // tBLON
 
 	ctx->prepared = true;
 
