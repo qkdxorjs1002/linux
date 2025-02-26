@@ -23,11 +23,11 @@ struct cwu50 {
 };
 
 static const struct drm_display_mode default_mode = {
-	.clock = 62500,
+	.clock = 61020,
 	.hdisplay = 720,
-	.hsync_start = 720 + 43,
-	.hsync_end = 720 + 43 + 20,
-	.htotal = 720 + 43 + 20 + 20,
+	.hsync_start = 720 + 30,
+	.hsync_end = 720 + 30 + 15,
+	.htotal = 720 + 30 + 15 + 15,
 	.vdisplay = 1280,
 	.vsync_start = 1280 + 8,
 	.vsync_end = 1280 + 8 + 2,
