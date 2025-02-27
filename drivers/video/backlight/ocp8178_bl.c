@@ -150,10 +150,17 @@ static int ocp8178_get_brightness(struct backlight_device *bl)
 	return gbl->current_value;
 }
 
+static bool ocp8178_controls_device(struct backlight_device *bl, struct device *display_dev)
+{
+	struct ocp8178_backlight *gbl = bl_get_data(bl);
+	return !gbl->fbdev || gbl->fbdev == display_dev;
+}
+
 static const struct backlight_ops ocp8178_backlight_ops = {
-	.options	= BL_CORE_SUSPENDRESUME,
-	.update_status	= ocp8178_update_status,
+	.options = BL_CORE_SUSPENDRESUME,
+	.update_status = ocp8178_update_status,
 	.get_brightness = ocp8178_get_brightness,
+	.controls_device = ocp8178_controls_device,
 };
 
 static int ocp8178_probe_dt(struct platform_device *pdev,
