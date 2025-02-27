@@ -430,6 +430,8 @@ static int cwu50_enable(struct drm_panel *panel)
 		dev_err(ctx->dev, "failed to turn display on (%d)\n", err);
 		goto disable_vci;
 	}
+
+	backlight_enable(ctx->backlight);
 	msleep(20);
 
 	/* Enabe tearing mode: send TE (tearing effect) at VBLANK */
@@ -446,8 +448,6 @@ static int cwu50_enable(struct drm_panel *panel)
 		/* debug, normally the command will fail */
 		dev_info(ctx->dev, "Read display power mode got: %d", response);
 	}
-
-	backlight_enable(ctx->backlight);
 
 	ctx->enabled = true;
 
