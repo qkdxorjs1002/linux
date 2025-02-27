@@ -442,6 +442,7 @@ static int cwu50_enable(struct drm_panel *panel)
 		dev_err(ctx->dev, "failed to enable vblank TE (%d)\n", err);
 		goto disable_vci;
 	}
+	msleep(20);
 
 	err = mipi_dsi_dcs_get_power_mode(dsi, &response);
 	if (!err) {
