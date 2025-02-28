@@ -25,7 +25,7 @@ struct cwu50 {
 };
 
 static const struct drm_display_mode default_mode = {
-	.clock = 61020,
+	.clock = 61111,
 	.hdisplay = 720,
 	.hsync_start = 720 + 30,
 	.hsync_end = 720 + 30 + 15,
@@ -34,9 +34,6 @@ static const struct drm_display_mode default_mode = {
 	.vsync_start = 1280 + 8,
 	.vsync_end = 1280 + 8 + 2,
 	.vtotal = 1280 + 8 + 2 + 16,
-	.width_mm = 62,
-	.height_mm = 110,
-	.type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED,
 };
 
 static inline struct cwu50 *panel_to_cwu50(struct drm_panel *panel)
@@ -281,6 +278,8 @@ static int cwu50_unprepare(struct drm_panel *panel)
 	if (!ctx->prepared)
 		return 0;
 
+	dev_info(ctx->dev, "unprepare panel");
+
 	gpiod_set_value_cansleep(ctx->reset_gpio, 1); /* assert reset */
 
 	regulator_disable(ctx->vci);
@@ -299,6 +298,8 @@ static int cwu50_disable(struct drm_panel *panel)
 
 	if (!ctx->enabled)
 		return 0;
+
+	dev_info(ctx->dev, "disable panel");
 
 	backlight_disable(ctx->backlight);
 
@@ -356,7 +357,10 @@ static int cwu50_prepare(struct drm_panel *panel)
 	if (ctx->prepared)
 		return 0;
 
-	gpiod_set_value_cansleep(ctx->reset_gpio, 1); /* ensure asserted state */
+	dev_info(ctx->dev, "prepare panel");
+
+	gpiod_set_value_cansleep(ctx->reset_gpio,
+				 1); /* ensure asserted state */
 
 	/* IOVCC first, then VCI */
 	err = regulator_enable(ctx->iovcc);
@@ -406,8 +410,18 @@ static int cwu50_enable(struct drm_panel *panel)
 	if (ctx->enabled)
 		return 0;
 
-	/* Exit sleep mode and power on */
+	dev_info(ctx->dev, "enable panel");
 
+	/* Enabe tearing mode: send TE (tearing effect) at VBLANK */
+	/* JD9365D seems need a parameter for this command */
+	// err = mipi_dsi_dcs_write_buffer(dsi, (u8[]){ 0x35, 0x00 }, 2);
+	err = mipi_dsi_dcs_set_tear_on(dsi, MIPI_DSI_DCS_TEAR_MODE_VBLANK);
+	if (err < 0) {
+		dev_err(ctx->dev, "failed to enable vblank TE (%d)\n", err);
+		goto disable_vci;
+	}
+
+	/* Exit sleep mode and power on */
 	err = cwu50_init_sequence(ctx);
 	if (err) {
 		dev_err(ctx->dev, "failed to send initialize sequence (%d)\n",
@@ -416,6 +430,7 @@ static int cwu50_enable(struct drm_panel *panel)
 	}
 
 	/* slpout */
+	dev_info(ctx->dev, "slpout");
 	err = mipi_dsi_dcs_exit_sleep_mode(dsi);
 	if (err) {
 		dev_err(ctx->dev, "failed to exit sleep mode (%d)\n", err);
@@ -425,22 +440,24 @@ static int cwu50_enable(struct drm_panel *panel)
 	/* tSLPOUT 120ms */
 	msleep(120);
 
+	dev_info(ctx->dev, "dpon");
 	err = mipi_dsi_dcs_set_display_on(dsi);
 	if (err) {
 		dev_err(ctx->dev, "failed to turn display on (%d)\n", err);
 		goto disable_vci;
 	}
 
+	dev_info(ctx->dev, "blon");
 	backlight_enable(ctx->backlight);
-	msleep(20);
-
-	/* Enabe tearing mode: send TE (tearing effect) at VBLANK */
-	/* JD9365D seems need a parameter for this command */
-	// err = mipi_dsi_dcs_write_buffer(dsi, (u8[]){ 0x35, 0x00 }, 2);
-	err = mipi_dsi_dcs_set_tear_on(dsi, MIPI_DSI_DCS_TEAR_MODE_VBLANK);
+	if (backlight_is_blank(ctx->backlight)) {
+		dev_info(ctx->dev, "Wakeup backlight from blank and suspend");
+		ctx->backlight->props.state &=
+			~(BL_CORE_FBBLANK | BL_CORE_SUSPENDED);
+		err = backlight_update_status(ctx->backlight);
+	}
 	if (err < 0) {
-		dev_err(ctx->dev, "failed to enable vblank TE (%d)\n", err);
-		goto disable_vci;
+		dev_err(ctx->dev,
+			"failed to wakeup backlight from blank and suspend");
 	}
 	msleep(20);
 
@@ -517,8 +534,7 @@ static int cwu50_probe(struct mipi_dsi_device *dsi)
 
 	dsi->lanes = 4;
 	dsi->format = MIPI_DSI_FMT_RGB888;
-	dsi->mode_flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_BURST |
-			  MIPI_DSI_MODE_VIDEO_SYNC_PULSE;
+	dsi->mode_flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_SYNC_PULSE;
 
 	ctx->reset_gpio = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_LOW);
 	if (IS_ERR(ctx->reset_gpio)) {
