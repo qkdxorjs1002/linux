@@ -359,9 +359,6 @@ static int cwu50_prepare(struct drm_panel *panel)
 
 	dev_info(ctx->dev, "prepare panel");
 
-	gpiod_set_value_cansleep(ctx->reset_gpio,
-				 1); /* ensure asserted state */
-
 	/* IOVCC first, then VCI */
 	err = regulator_enable(ctx->iovcc);
 	if (err) {
@@ -382,9 +379,13 @@ static int cwu50_prepare(struct drm_panel *panel)
 	 * tRPWIRES >= 5ms
 	 * 0 <= tMIPI_ON <= tRPWIRES
 	 */
-	msleep(30);
+	msleep(5);
 
 	/* MIPI should be LP-11 now */
+
+	gpiod_set_value_cansleep(ctx->reset_gpio,
+				 1); /* ensure asserted state */
+	msleep(10);
 
 	/* tRESETL=10us */
 	/* tRESETH >= 5ms */
@@ -449,22 +450,18 @@ static int cwu50_enable(struct drm_panel *panel)
 
 	dev_info(ctx->dev, "blon");
 	backlight_enable(ctx->backlight);
-	if (backlight_is_blank(ctx->backlight)) {
-		dev_info(ctx->dev, "Wakeup backlight from blank and suspend");
-		ctx->backlight->props.state &=
-			~(BL_CORE_FBBLANK | BL_CORE_SUSPENDED);
-		err = backlight_update_status(ctx->backlight);
-	}
-	if (err < 0) {
-		dev_err(ctx->dev,
-			"failed to wakeup backlight from blank and suspend");
-	}
-	msleep(20);
 
-	err = mipi_dsi_dcs_get_power_mode(dsi, &response);
-	if (!err) {
-		/* debug, normally the command will fail */
-		dev_info(ctx->dev, "Read display power mode got: %d", response);
+	int retrive = 0;
+	while (retrive <= 50) {
+		retrive++;
+		msleep(20);
+		err = mipi_dsi_dcs_get_power_mode(dsi, &response);
+		if (!err) {
+			/* debug, normally the command will fail */
+			dev_info(ctx->dev, "Read display power mode got: %d",
+				 response);
+			break;
+		}
 	}
 
 	ctx->enabled = true;
@@ -570,6 +567,8 @@ static int cwu50_probe(struct mipi_dsi_device *dsi)
 		dev_err(ctx->dev, "devm_of_find_backlight");
 		return PTR_ERR(ctx->backlight);
 	}
+
+	backlight_enable(ctx->backlight);
 
 	ctx->panel.prepare_prev_first = true;
 
