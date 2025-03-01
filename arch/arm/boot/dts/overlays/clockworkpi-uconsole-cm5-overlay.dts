@@ -73,7 +73,7 @@
 					compatible = "x-powers,axp221-ac-power-supply";
 				};
 				usb_power_supply: usb-power {
-					compatible = "x-powers,axp221-usb-power-supply";
+					compatible = "x-powers,axp223-usb-power-supply";
 				};
 				axp_adc: adc {
 					compatible = "x-powers,axp221-adc";
