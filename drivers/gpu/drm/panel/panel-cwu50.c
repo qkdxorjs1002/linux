@@ -398,7 +398,7 @@ static int cwu50_prepare(struct drm_panel *panel)
 				 1); /* ensure asserted state */
 
 	/* tRESETL=10us */
-	msleep(60);
+	msleep(10);
 
 	/* tRESETH >= 5ms */
 	gpiod_set_value_cansleep(ctx->reset_gpio, 0); /* deassert */
