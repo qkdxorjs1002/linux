@@ -84,7 +84,12 @@ find ../prebuilt/boot/firmware/ -type f \( -name "*.dtb" -o -name "*.dtbo" -o -n
     relative_path=$(realpath --relative-to=../prebuilt/boot/firmware/ "$file")
     sed -i "/^set -e/a rm -vf /boot/firmware/$relative_path" ../prebuilt/DEBIAN/preinst
 done
-sed -i "/^set -e/a cp -rvf /boot/firmware /boot/firmware.$BUILD_VERSION.bak" ../prebuilt/DEBIAN/preinst
+find ../prebuilt/boot/firmware/ -type f \( -name "*.dtb" -o -name "*.dtbo" -o -name "*.img" \) | while read file; do
+    relative_path=$(realpath --relative-to=../prebuilt/boot/firmware/ "$file")
+    sed -i "/^set -e/a cp -vf /boot/firmware/$relative_path /boot/firmware.$BUILD_VERSION.bak/$relative_path" ../prebuilt/DEBIAN/preinst
+done
+
+sed -i "/^set -e/a mkdir -p /boot/firmware.$BUILD_VERSION.bak/overlays" ../prebuilt/DEBIAN/preinst
 sed -i "/^set -e/a\
 if [ \"\$1\" = \"remove\" ]; then\n\
     cp -rvf /boot/firmware.$BUILD_VERSION.bak/* /boot/firmware/\n\
@@ -101,8 +106,8 @@ Maintainer: paragonnov <qkdxorjs1002@gmail.com>
 Section: kernel
 Priority: optional
 Provides: linux-image, linux-kernel-headers, linux-libc-dev
-Conflicts: linux-image, linux-kernel-headers, linux-libc-dev, linux-image-rpi-2712, raspberrypi-kernel, clockworkpi-cm-firmware, clockworkpi-kernel
-Replaces: linux-image, linux-kernel-headers, linux-libc-dev, linux-image-rpi-2712, raspberrypi-kernel, clockworkpi-cm-firmware, clockworkpi-kernel
+Breaks: linux-image, linux-kernel-headers, linux-libc-dev, linux-image-rpi-2712, raspberrypi-kernel, clockworkpi-cm-firmware, clockworkpi-kernel
+Replaces: linux-image, linux-kernel-headers, linux-libc-dev, linux-image-rpi-2712, raspberrypi-kernel, clockworkpi-cm-firmware, clockworkpi-kerne, novkernel
 Description: Custom Kernel for uConsole CM5(Lite)
 EOF
 
