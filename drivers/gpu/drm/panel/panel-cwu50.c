@@ -34,6 +34,9 @@ static const struct drm_display_mode default_mode = {
 	.vsync_start = 1280 + 8,
 	.vsync_end = 1280 + 8 + 2,
 	.vtotal = 1280 + 8 + 2 + 16,
+	.width_mm = 62,
+	.height_mm = 110,
+	.type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED,
 };
 
 static inline struct cwu50 *panel_to_cwu50(struct drm_panel *panel)
@@ -359,9 +362,6 @@ static int cwu50_prepare(struct drm_panel *panel)
 
 	dev_info(ctx->dev, "prepare panel");
 
-	gpiod_set_value_cansleep(ctx->reset_gpio,
-				 1); /* ensure asserted state */
-
 	/* IOVCC first, then VCI */
 	err = regulator_enable(ctx->iovcc);
 	if (err) {
@@ -378,6 +378,14 @@ static int cwu50_prepare(struct drm_panel *panel)
 		goto disable_iovcc;
 	}
 
+	msleep(15);
+
+	err = mipi_dsi_dcs_nop(dsi);
+	if (err) {
+		dev_err(ctx->dev, "failed to send nop (%d)\n", err);
+		goto disable_vci;
+	}
+
 	/* Wait for MIPI to initialize
 	 * tRPWIRES >= 5ms
 	 * 0 <= tMIPI_ON <= tRPWIRES
@@ -386,14 +394,21 @@ static int cwu50_prepare(struct drm_panel *panel)
 
 	/* MIPI should be LP-11 now */
 
+	gpiod_set_value_cansleep(ctx->reset_gpio,
+				 1); /* ensure asserted state */
+
 	/* tRESETL=10us */
+	msleep(10);
+
 	/* tRESETH >= 5ms */
 	gpiod_set_value_cansleep(ctx->reset_gpio, 0); /* deassert */
-	msleep(5);
+	msleep(20);
 
 	ctx->prepared = true;
 
 	return 0;
+disable_vci:
+	regulator_disable(ctx->vci);
 disable_iovcc:
 	regulator_disable(ctx->iovcc);
 	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
@@ -582,10 +597,9 @@ static int cwu50_probe(struct mipi_dsi_device *dsi)
 	if (err < 0) {
 		dev_err(dev, "mipi_dsi_attach() failed: %d\n", err);
 		drm_panel_remove(&ctx->panel);
-		return err;
 	}
 
-	return 0;
+	return err;
 }
 
 static void cwu50_remove(struct mipi_dsi_device *dsi)
