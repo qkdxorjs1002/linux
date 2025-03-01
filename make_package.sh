@@ -5,119 +5,109 @@ REPO=$(pwd)
 rm -rf ../linux-*
 
 rm -rf ../prebuilt
-rm -rf ../installer
+rm -rf ../output
 
 # make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- bcm2711_defconfig
-# make -j10 deb-pkg
+# make -j10 deb-pkg LOCALVERSION=-nov
 # cp ./arch/arm64/boot/Image ../prebuilt/boot/firmware/kernel8.img
 
 make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- bcm2712_defconfig
-make -j10 deb-pkg
+make -j10 deb-pkg LOCALVERSION=-nov
+
+
+############# MANUAL
+
+# KERNEL_VERSION=$(cat ./include/config/kernel.release)
+# BUILD_VERSION=$(cat ./.version)
+
+# mkdir -p ../prebuilt/dependencies
+# mkdir -p ../prebuilt/firmware/overlays
+
+# mv ../linux-*.deb ../prebuilt/dependencies/
+# cp ./arch/arm64/boot/Image ../prebuilt/firmware/kernel_2712.img
+# cp ./arch/arm64/boot/dts/broadcom/*.dtb ../prebuilt/firmware/
+# cp ./arch/arm64/boot/dts/overlays/*.dtbo ../prebuilt/firmware/overlays/
+
+# tree -L 3 ../prebuilt
+
+# mkdir -p ../installer
+# tar -czvf ../installer/novkernel-$KERNEL_VERSION\_$BUILD_VERSION.tar.gz -C ../prebuilt .
+# cat << 'EOF' > ../installer/install.sh
+# #!/bin/bash
+# set -e
+
+# echo "Backup current kernel..."
+# mkdir -p /opt/novkernel/
+
+# echo "Unpacking included dependencies..."
+# mkdir -p /tmp/novkernel
+# tar -xzvf ./novkernel-*.tar.gz -C /tmp/novkernel/
+
+# echo "Installing included dependencies..."
+# dpkg -i /tmp/novkernel/dependencies/*.deb
+# echo "Dependencies installed successfully."
+
+# echo "Installing included firmwares..."
+# cp -rf /boot/firmware /boot/firmware.bak
+# cp -rf /tmp/novkernel/firmware/* /boot/firmware/
+# echo "Firmwares installed successfully."
+
+# rm -rf /tmp/novkernel
+# EOF
+
+# chmod +x ../installer/install.sh
+
+# tree -L 2 ../installer
+
+# rm -rf ../prebuilt
+
+
+############# DEB PACK
 
 KERNEL_VERSION=$(cat ./include/config/kernel.release)
 BUILD_VERSION=$(cat ./.version)
 
-mkdir -p ../prebuilt/dependencies
-mkdir -p ../prebuilt/firmware/overlays
+mkdir -p ../prebuilt/boot/firmware/overlays
 
-mv ../linux-*.deb ../prebuilt/dependencies/
-cp ./arch/arm64/boot/Image ../prebuilt/firmware/kernel_2712.img
-cp ./arch/arm64/boot/dts/broadcom/*.dtb ../prebuilt/firmware/
-cp ./arch/arm64/boot/dts/overlays/*.dtbo ../prebuilt/firmware/overlays/
+dpkg-deb -R ../linux-headers-*.deb ../prebuilt/
+rm -rf ../prebuilt/DEBIAN
+dpkg-deb -R ../linux-libc-*.deb ../prebuilt/
+rm -rf ../prebuilt/DEBIAN
+dpkg-deb -R ../linux-image-*.deb ../prebuilt/
+rm -rf ../prebuilt/DEBIAN/control
 
-tree -L 3 ../prebuilt
+cp ./arch/arm64/boot/Image ../prebuilt/boot/firmware/kernel_2712.img
+cp ./arch/arm64/boot/dts/broadcom/*.dtb ../prebuilt/boot/firmware/
+cp ./arch/arm64/boot/dts/overlays/*.dtbo ../prebuilt/boot/firmware/overlays/
 
-mkdir -p ../installer
-tar -czvf ../installer/novkernel-$KERNEL_VERSION\_$BUILD_VERSION.tar.gz -C ../prebuilt .
-cat << 'EOF' > ../installer/install.sh
-#!/bin/bash
-set -e
+find ../prebuilt/boot/firmware/ -type f \( -name "*.dtb" -o -name "*.dtbo" -o -name "*.img" \) | while read file; do
+    relative_path=$(realpath --relative-to=../prebuilt/boot/firmware/ "$file")
+    sed -i "/^set -e/a rm -vf /boot/firmware/$relative_path" ../prebuilt/DEBIAN/preinst
+done
+sed -i "/^set -e/a cp -rvf /boot/firmware /boot/firmware.$BUILD_VERSION.bak" ../prebuilt/DEBIAN/preinst
+sed -i "/^set -e/a\
+if [ \"\$1\" = \"remove\" ]; then\n\
+    cp -rvf /boot/firmware.$BUILD_VERSION.bak/* /boot/firmware/\n\
+    rm -rvf /boot/firmware.$BUILD_VERSION.bak\n\
+fi\n\
+" ../prebuilt/DEBIAN/postrm
 
-echo "Unpacking included dependencies..."
-mkdir -p /tmp/novkernel
-tar -xzvf ./novkernel-*.tar.gz -C /tmp/novkernel/
-
-echo "Installing included dependencies..."
-dpkg -i /tmp/novkernel/dependencies/*.deb
-echo "Dependencies installed successfully."
-
-echo "Installing included firmwares..."
-cp -rf /boot/firmware /boot/firmware.bak
-cp -rf /tmp/novkernel/firmware/* /boot/firmware/
-echo "Firmwares installed successfully."
-
-rm -rf /tmp/novkernel
+cat << 'EOF' > ../prebuilt/DEBIAN/control
+Package: novkernel-KERNEL_VERSION
+Source: linux-upstream
+Version: BUILD_VERSION
+Architecture: arm64
+Maintainer: paragonnov <qkdxorjs1002@gmail.com>
+Section: kernel
+Priority: optional
+Provides: linux-image, linux-kernel-headers, linux-libc-dev
+Conflicts: linux-image, linux-kernel-headers, linux-libc-dev, linux-image-rpi-2712, raspberrypi-kernel, clockworkpi-cm-firmware, clockworkpi-kernel
+Replaces: linux-image, linux-kernel-headers, linux-libc-dev, linux-image-rpi-2712, raspberrypi-kernel, clockworkpi-cm-firmware, clockworkpi-kernel
+Description: Custom Kernel for uConsole CM5(Lite)
 EOF
 
-chmod +x ../installer/install.sh
+sed -i "s|KERNEL_VERSION|$KERNEL_VERSION|g" ../prebuilt/DEBIAN/control
+sed -i "s|BUILD_VERSION|$BUILD_VERSION|g" ../prebuilt/DEBIAN/control
 
-tree -L 2 ../installer
-
-rm -rf ../prebuilt
-
-# mkdir -p ../prebuilt/DEBIAN
-# mkdir -p ../prebuilt/opt/novkernel_$BUILD_VERSION/dependencies
-# mkdir -p ../prebuilt/opt/novkernel_$BUILD_VERSION/firmware/overlays
-
-# cp ./arch/arm64/boot/Image ../prebuilt/opt/novkernel_$BUILD_VERSION/firmware/kernel_2712.img
-# cp ./arch/arm64/boot/dts/broadcom/*.dtb ../prebuilt/opt/novkernel_$BUILD_VERSION/firmware/
-# cp ./arch/arm64/boot/dts/overlays/*.dtbo ../prebuilt/opt/novkernel_$BUILD_VERSION/firmware/overlays/
-# # make clean
-
-# mv ../linux-*.deb ../prebuilt/opt/novkernel_$BUILD_VERSION/dependencies/
-
-# cat << 'EOF' > ../prebuilt/DEBIAN/control
-# Package: novkernel-KERNEL_VERSION
-# Version: BUILD_VERSION
-# Architecture: arm64
-# Section: kernel
-# Depends: dpkg
-# Replaces: linux-image, linux-image-rpi-2712, raspberrypi-kernel
-# Maintainer: paragonnov <qkdxorjs1002@gmail.com>
-# Description: Custom Kernel for uConsole CM5(Lite)
-# EOF
-
-# sed -i "s|KERNEL_VERSION|$KERNEL_VERSION|g" ../prebuilt/DEBIAN/control
-# sed -i "s|BUILD_VERSION|$BUILD_VERSION|g" ../prebuilt/DEBIAN/control
-
-
-# cat << 'EOF' > ../prebuilt/DEBIAN/postinst
-# #!/bin/bash
-# set -e
-
-# echo "Installing included dependencies..."
-
-# cd /opt/novkernel_BUILD_VERSION/dependencies
-# dpkg -i *.deb || apt-get install -f -y
-
-# mkdir -p /opt/novkernel_BUILD_VERSION/backup/firmware
-# cp -rf /boot/firmware/* /opt/novkernel_BUILD_VERSION/backup/firmware/
-# cp -rf /opt/novkernel_BUILD_VERSION/firmware/* /boot/firmware/
-
-# echo "Dependencies installed successfully."
-# EOF
-
-# sed -i "s|BUILD_VERSION|$BUILD_VERSION|g" ../prebuilt/DEBIAN/postinst
-# chmod +x ../prebuilt/DEBIAN/postinst
-
-
-# cat << 'EOF' > ../prebuilt/DEBIAN/postrm
-# #!/bin/bash
-# set -e
-
-# echo "Removing included dependencies..."
-
-# dpkg -r $(dpkg --info /opt/novkernel_BUILD_VERSION/dependencies/*.deb | awk '/Package:/ {print $2}')
-# cp -rf /opt/novkernel_BUILD_VERSION/backup/firmware/* /boot/firmware/
-
-# rm -rf /opt/novkernel_BUILD_VERSION
-
-# echo "Dependencies removed successfully."
-
-# EOF
-
-# sed -i "s|BUILD_VERSION|$BUILD_VERSION|g" ../prebuilt/DEBIAN/postrm
-# chmod +x ../prebuilt/DEBIAN/postrm
-
-
-# dpkg-deb --build ../prebuilt ../novkernel-$KERNEL_VERSION\_$BUILD_VERSION.deb
+mkdir -p ../output
+dpkg-deb --build ../prebuilt ../output/novkernel-$KERNEL_VERSION\_$BUILD_VERSION.deb
