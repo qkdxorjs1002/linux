@@ -1434,12 +1434,11 @@ int axp20x_device_probe(struct axp20x_dev *axp20x)
 					      SYS_OFF_PRIO_DEFAULT,
 					      axp20x_power_off, axp20x);
 
-	regmap_update_bits(axp20x_batt->regmap, AXP20X_VBUS_IPSOUT_MGMT, 0x03,
-			   0x03);
-	regmap_update_bits(axp20x_batt->regmap, AXP20X_OFF_CTRL, 0x08, 0x08);
-	regmap_update_bits(axp20x_batt->regmap, AXP20X_CHRG_CTRL2, 0x30, 0x20);
-	regmap_update_bits(axp20x_batt->regmap, AXP20X_PEK_KEY, 0x0f, 0x0b);
-	regmap_update_bits(axp20x_batt->regmap, AXP20X_GPIO0_CTRL, 0x07, 0x00);
+	regmap_update_bits(axp20x->regmap, AXP20X_VBUS_IPSOUT_MGMT, 0x03, 0x03);
+	regmap_update_bits(axp20x->regmap, AXP20X_OFF_CTRL, 0x08, 0x08);
+	regmap_update_bits(axp20x->regmap, AXP20X_CHRG_CTRL2, 0x30, 0x20);
+	regmap_update_bits(axp20x->regmap, AXP20X_PEK_KEY, 0x0f, 0x0b);
+	regmap_update_bits(axp20x->regmap, AXP20X_GPIO0_CTRL, 0x07, 0x00);
 
 	dev_info(axp20x->dev, "AXP20X driver loaded\n");
 
