@@ -2,6 +2,7 @@
 /plugin/;
 
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/clock/rp1.h>
 
 / {
 	compatible = "brcm,bcm2835";
@@ -132,6 +133,8 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 			status = "okay";
+			assigned-clocks = <&rp1_clocks RP1_CLK_MIPI1_DSI_BYTECLOCK>, <&rp1_clocks RP1_CLK_MIPI1_DPI>;
+			assigned-clock-rates = <45833333>, <61111240>;
 			port {
 				dsi_out_port: endpoint {
 					remote-endpoint = <&panel_dsi_port>;
@@ -145,6 +148,7 @@
 				rotation = <90>;
 				vci-supply = <&reg_dcdc3>;
 				iovcc-supply = <&reg_aldo2>;
+				status = "okay";
 				port {
 					panel_dsi_port: endpoint {
 						remote-endpoint = <&dsi_out_port>;

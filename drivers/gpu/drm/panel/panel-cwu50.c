@@ -269,37 +269,26 @@ static int cwu50_init_sequence(struct cwu50 *ctx)
 	return 0;
 }
 
-static int cwu50_unprepare(struct drm_panel *panel)
+static int unprepare_sequence(struct drm_panel *panel)
 {
 	struct cwu50 *ctx = panel_to_cwu50(panel);
 	struct mipi_dsi_device *dsi = to_mipi_dsi_device(ctx->dev);
 	int err;
-
-	if (!ctx->prepared)
-		return 0;
-
-	dev_info(ctx->dev, "unprepare panel");
 
 	gpiod_set_value_cansleep(ctx->reset_gpio, 1); /* assert reset */
 
 	regulator_disable(ctx->vci);
-	regulator_disable(ctx->iovcc);
 
-	ctx->prepared = false;
+	regulator_disable(ctx->iovcc);
 
 	return 0;
 }
 
-static int cwu50_disable(struct drm_panel *panel)
+static int disable_sequence(struct drm_panel *panel)
 {
 	struct cwu50 *ctx = panel_to_cwu50(panel);
 	struct mipi_dsi_device *dsi = to_mipi_dsi_device(ctx->dev);
 	int err;
-
-	if (!ctx->enabled)
-		return 0;
-
-	dev_info(ctx->dev, "disable panel");
 
 	backlight_disable(ctx->backlight);
 
@@ -343,21 +332,14 @@ power_off_case1:
 	/* tRSTOFF1 >= 120ms */
 	msleep(120);
 
-	ctx->enabled = false;
-
 	return 0;
 }
 
-static int cwu50_prepare(struct drm_panel *panel)
+static int prepare_sequence(struct drm_panel *panel)
 {
 	struct cwu50 *ctx = panel_to_cwu50(panel);
 	struct mipi_dsi_device *dsi = to_mipi_dsi_device(ctx->dev);
 	int err;
-
-	if (ctx->prepared)
-		return 0;
-
-	dev_info(ctx->dev, "prepare panel");
 
 	/* IOVCC first, then VCI */
 	err = regulator_enable(ctx->iovcc);
@@ -392,8 +374,6 @@ static int cwu50_prepare(struct drm_panel *panel)
 	gpiod_set_value_cansleep(ctx->reset_gpio, 0); /* deassert */
 	msleep(5);
 
-	ctx->prepared = true;
-
 	return 0;
 disable_iovcc:
 	regulator_disable(ctx->iovcc);
@@ -401,17 +381,12 @@ disable_iovcc:
 	return err;
 }
 
-static int cwu50_enable(struct drm_panel *panel)
+static int enable_sequence(struct drm_panel *panel)
 {
 	struct cwu50 *ctx = panel_to_cwu50(panel);
 	struct mipi_dsi_device *dsi = to_mipi_dsi_device(ctx->dev);
 	int err;
 	u8 response;
-
-	if (ctx->enabled)
-		return 0;
-
-	dev_info(ctx->dev, "enable panel");
 
 	/* Enabe tearing mode: send TE (tearing effect) at VBLANK */
 	/* JD9365D seems need a parameter for this command */
@@ -451,20 +426,12 @@ static int cwu50_enable(struct drm_panel *panel)
 	dev_info(ctx->dev, "blon");
 	backlight_enable(ctx->backlight);
 
-	int retrive = 0;
-	while (retrive <= 50) {
-		retrive++;
-		msleep(20);
-		err = mipi_dsi_dcs_get_power_mode(dsi, &response);
-		if (!err) {
-			/* debug, normally the command will fail */
-			dev_info(ctx->dev, "Read display power mode got: %d",
-				 response);
-			break;
-		}
+	msleep(20);
+	err = mipi_dsi_dcs_get_power_mode(dsi, &response);
+	if (!err) {
+		/* debug, normally the command will fail */
+		dev_info(ctx->dev, "Read display power mode got: %d", response);
 	}
-
-	ctx->enabled = true;
 
 	return 0;
 disable_vci:
@@ -473,6 +440,90 @@ disable_iovcc:
 	regulator_disable(ctx->iovcc);
 	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
 	return err;
+}
+
+static int cwu50_unprepare(struct drm_panel *panel)
+{
+	struct cwu50 *ctx = panel_to_cwu50(panel);
+	struct mipi_dsi_device *dsi = to_mipi_dsi_device(ctx->dev);
+	int err;
+
+	if (!ctx->prepared)
+		return 0;
+
+	dev_info(ctx->dev, "unprepare panel");
+
+	err = unprepare_sequence(panel);
+	if (err) {
+		return err;
+	}
+
+	ctx->prepared = false;
+
+	return 0;
+}
+
+static int cwu50_disable(struct drm_panel *panel)
+{
+	struct cwu50 *ctx = panel_to_cwu50(panel);
+	struct mipi_dsi_device *dsi = to_mipi_dsi_device(ctx->dev);
+	int err;
+
+	if (!ctx->enabled)
+		return 0;
+
+	dev_info(ctx->dev, "disable panel");
+
+	err = disable_sequence(panel);
+	if (err) {
+		return err;
+	}
+
+	ctx->enabled = false;
+
+	return 0;
+}
+
+static int cwu50_prepare(struct drm_panel *panel)
+{
+	struct cwu50 *ctx = panel_to_cwu50(panel);
+	struct mipi_dsi_device *dsi = to_mipi_dsi_device(ctx->dev);
+	int err;
+
+	if (ctx->prepared)
+		return 0;
+
+	dev_info(ctx->dev, "prepare panel");
+
+	err = prepare_sequence(panel);
+	if (err) {
+		return err;
+	}
+
+	ctx->prepared = true;
+
+	return 0;
+}
+
+static int cwu50_enable(struct drm_panel *panel)
+{
+	struct cwu50 *ctx = panel_to_cwu50(panel);
+	struct mipi_dsi_device *dsi = to_mipi_dsi_device(ctx->dev);
+	int err;
+
+	if (ctx->enabled)
+		return 0;
+
+	dev_info(ctx->dev, "enable panel");
+
+	err = enable_sequence(panel);
+	if (err) {
+		return err;
+	}
+
+	ctx->enabled = true;
+
+	return 0;
 }
 
 static int cwu50_get_modes(struct drm_panel *panel,
@@ -567,8 +618,6 @@ static int cwu50_probe(struct mipi_dsi_device *dsi)
 		dev_err(ctx->dev, "devm_of_find_backlight");
 		return PTR_ERR(ctx->backlight);
 	}
-
-	backlight_enable(ctx->backlight);
 
 	ctx->panel.prepare_prev_first = true;
 
