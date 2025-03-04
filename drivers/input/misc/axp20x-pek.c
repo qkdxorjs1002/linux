@@ -338,9 +338,6 @@ static int axp20x_pek_suspend(struct device *dev)
 	if (device_may_wakeup(dev)) {
 		enable_irq_wake(axp20x_pek->irq_dbf);
 		enable_irq_wake(axp20x_pek->irq_dbr);
-	} else {
-		disable_irq(axp20x_pek->irq_dbf);
-		disable_irq(axp20x_pek->irq_dbr);
 	}
 
 	return 0;
@@ -353,9 +350,6 @@ static int axp20x_pek_resume(struct device *dev)
 	if (device_may_wakeup(dev)) {
 		disable_irq_wake(axp20x_pek->irq_dbf);
 		disable_irq_wake(axp20x_pek->irq_dbr);
-	} else {
-		enable_irq(axp20x_pek->irq_dbf);
-		enable_irq(axp20x_pek->irq_dbr);
 	}
 
 	return 0;

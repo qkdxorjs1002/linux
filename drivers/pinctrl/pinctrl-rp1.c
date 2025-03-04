@@ -18,6 +18,7 @@
 #include <linux/io.h>
 #include <linux/irq.h>
 #include <linux/irqdesc.h>
+#include <linux/interrupt.h>
 #include <linux/init.h>
 #include <linux/of_address.h>
 #include <linux/of.h>
@@ -929,6 +930,21 @@ static int rp1_gpio_irq_set_type(struct irq_data *data, unsigned int type)
 	return ret;
 }
 
+static int rp1_gpio_irq_set_wake(struct irq_data *data, unsigned int on)
+{
+	struct gpio_chip *chip = irq_data_get_irq_chip_data(data);
+	struct rp1_pinctrl *pc = gpiochip_get_data(chip);
+	unsigned gpio = irqd_to_hwirq(data);
+	struct rp1_pin_info *pin = rp1_get_pin(chip, gpio);
+	int bank = pin->bank;
+
+	if (data->parent_data) {
+		return irq_chip_set_wake_parent(data, on);
+	}
+
+	return irq_set_irq_wake(pc->irq[bank], on);
+}
+
 static void rp1_gpio_irq_ack(struct irq_data *data)
 {
 	struct gpio_chip *chip = irq_data_get_irq_chip_data(data);
@@ -967,6 +983,7 @@ static struct irq_chip rp1_gpio_irq_chip = {
 	.irq_enable = rp1_gpio_irq_enable,
 	.irq_disable = rp1_gpio_irq_disable,
 	.irq_set_type = rp1_gpio_irq_set_type,
+	.irq_set_wake = rp1_gpio_irq_set_wake,
 	.irq_ack = rp1_gpio_irq_ack,
 	.irq_mask = rp1_gpio_irq_disable,
 	.irq_unmask = rp1_gpio_irq_enable,
@@ -1527,6 +1544,24 @@ static inline void __iomem *devm_auto_iomap(struct platform_device *pdev,
 		return devm_platform_ioremap_resource(pdev, index);
 }
 
+static int rp1_pinctrl_suspend(struct device *dev)
+{
+	struct rp1_pinctrl *pc = dev_get_drvdata(dev);
+
+	return pinctrl_force_sleep(pc->pctl_dev);
+}
+
+static int rp1_pinctrl_resume(struct device *dev)
+{
+	struct rp1_pinctrl *pc = dev_get_drvdata(dev);
+
+	return pinctrl_force_default(pc->pctl_dev);
+}
+
+SIMPLE_DEV_PM_OPS(rp1_pinctrl_pm_ops, rp1_pinctrl_suspend, rp1_pinctrl_resume);
+
+EXPORT_SYMBOL(rp1_pinctrl_pm_ops);
+
 static int rp1_pinctrl_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -1690,6 +1725,7 @@ static struct platform_driver rp1_pinctrl_driver = {
 		.name = MODULE_NAME,
 		.of_match_table = rp1_pinctrl_match,
 		.suppress_bind_attrs = true,
+		.pm = &rp1_pinctrl_pm_ops,
 	},
 };
 builtin_platform_driver(rp1_pinctrl_driver);
