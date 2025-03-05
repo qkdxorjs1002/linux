@@ -166,15 +166,28 @@ cp $DTB_OVERLAYS/overlays/*.dtbo $DEB_PREBUILT/boot/firmware/overlays/
 
 find $DEB_PREBUILT/boot/firmware/ -type f \( -name "*.dtb" -o -name "*.dtbo" -o -name "*.img" \) | while read file; do
     relative_path=$(realpath --relative-to=$DEB_PREBUILT/boot/firmware/ "$file")
-    sed -i "/^set -e/a rm -vf \"/boot/firmware/$relative_path\"" $DEB_PREBUILT/DEBIAN/preinst
+    sed -i "/^set -e/a rm -vf \"\$BOOT_PATH/$relative_path\"" $DEB_PREBUILT/DEBIAN/preinst
 done
 find $DEB_PREBUILT/boot/firmware/ -type f \( -name "*.dtb" -o -name "*.dtbo" -o -name "*.img" \) | while read file; do
     relative_path=$(realpath --relative-to=$DEB_PREBUILT/boot/firmware/ "$file")
-    sed -i "/^set -e/a [ -e \"/boot/firmware/$relative_path\" ] && cp -vf \"/boot/firmware/$relative_path\" \"/boot/firmware.$BUILD_VERSION.bak/$relative_path\"" $DEB_PREBUILT/DEBIAN/preinst
+    sed -i "/^set -e/a [ -e \"\$BOOT_PATH/$relative_path\" ] && cp -vf \"\$BOOT_PATH/$relative_path\" \"/boot/firmware.$BUILD_VERSION.bak/$relative_path\"" $DEB_PREBUILT/DEBIAN/preinst
 done
 
 sed -i "/^set -e/a mkdir -p /boot/firmware.$BUILD_VERSION.bak/overlays" $DEB_PREBUILT/DEBIAN/preinst
 sed -i "/^set -e/a sed -i \"s|MODULES=dep|MODULES=most|g\" /etc/initramfs-tools/initramfs.conf" $DEB_PREBUILT/DEBIAN/preinst
+sed -i "/^set -e/a \
+BOOT_PATH=\"\"\n\
+if [ -e \"/boot/firmware/config.txt\" ]; then\n\
+    echo \"'/boot/firmware' found.\"\n\
+    BOOT_PATH=\"/boot/firmware\"\n\
+elif [ -e \"/boot/config.txt\" ]; then\n\
+    echo \"'/boot' found.\"\n\
+    BOOT_PATH=\"/boot\"\n\
+else \n\
+    echo \"There's no supported boot structure found.\"\n\
+    exit;\n\
+fi\n\
+" $DEB_PREBUILT/DEBIAN/preinst
 
 sed -i "/exit 0/i\
 echo \"Detect boot sturucture...\"\n\
