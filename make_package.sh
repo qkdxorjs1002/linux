@@ -61,10 +61,10 @@ echo "Press any key to install kernel..."
 read TEST
 
 echo "Detect boot sturucture..."
-if [ -e "/boot/firmware/config.txt" ]; then
+if [ -e "/boot/firmware/bootcode.bin" ]; then
     echo "'/boot/firmware' found."
     BOOT_PATH="/boot/firmware"
-elif [ -e "/boot/config.txt" ]; then
+elif [ -e "/boot/bootcode.bin" ]; then
     echo "'/boot' found."
     BOOT_PATH="/boot"
 else 
@@ -177,10 +177,10 @@ sed -i "/^set -e/a mkdir -p /boot/firmware.$BUILD_VERSION.bak/overlays" $DEB_PRE
 sed -i "/^set -e/a sed -i \"s|MODULES=dep|MODULES=most|g\" /etc/initramfs-tools/initramfs.conf" $DEB_PREBUILT/DEBIAN/preinst
 sed -i "/^set -e/a \
 BOOT_PATH=\"\"\n\
-if [ -e \"/boot/firmware/config.txt\" ]; then\n\
+if [ -e \"/boot/firmware/bootcode.bin\" ]; then\n\
     echo \"'/boot/firmware' found.\"\n\
     BOOT_PATH=\"/boot/firmware\"\n\
-elif [ -e \"/boot/config.txt\" ]; then\n\
+elif [ -e \"/boot/bootcode.bin\" ]; then\n\
     echo \"'/boot' found.\"\n\
     BOOT_PATH=\"/boot\"\n\
 else \n\
@@ -191,11 +191,12 @@ fi\n\
 
 sed -i "/exit 0/i\
 echo \"Detect boot sturucture...\"\n\
-if [ -e \"/boot/firmware/config.txt\" ]; then\n\
+if [ -e \"/boot/firmware/bootcode.bin\" ]; then\n\
     echo \"'/boot/firmware' found.\"\n\
-elif [ -e \"/boot/config.txt\" ]; then\n\
+elif [ -e \"/boot/bootcode.bin\" ]; then\n\
     echo \"'/boot' found.\"\n\
     cp -rf /boot/firmware/* /boot/\n\
+    rm -rf /boot/firmware\n\
 fi\n\
 if [ -e \"/boot/firmware/kernel_2712.img\" ]; then\n\
     echo \"Boot kernel applied successfully on /boot/firmware/kernel_2712.img\"\n\
