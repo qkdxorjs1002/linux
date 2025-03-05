@@ -177,11 +177,11 @@ sed -i "/^set -e/a mkdir -p /boot/firmware.$BUILD_VERSION.bak/overlays" $DEB_PRE
 sed -i "/^set -e/a sed -i \"s|MODULES=dep|MODULES=most|g\" /etc/initramfs-tools/initramfs.conf" $DEB_PREBUILT/DEBIAN/preinst
 
 sed -i "/exit 0/i\
-echo "Detect boot sturucture..."\n\
-if [ -e "/boot/firmware/config.txt" ]; then\n\
-    echo "'/boot/firmware' found."\n\
-elif [ -e "/boot/config.txt" ]; then\n\
-    echo "'/boot' found."\n\
+echo \"Detect boot sturucture...\"\n\
+if [ -e \"/boot/firmware/config.txt\" ]; then\n\
+    echo \"'/boot/firmware' found.\"\n\
+elif [ -e \"/boot/config.txt\" ]; then\n\
+    echo \"'/boot' found.\"\n\
     cp -rf /boot/firmware/* /boot/\n\
 fi\n\
 if [ -e \"/boot/firmware/kernel_2712.img\" ]; then\n\
