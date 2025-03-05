@@ -105,6 +105,32 @@ fi
 update-initramfs -c -k KERNEL_VERSION
 
 echo ""
+echo "Applying boot kernel..."
+if [ -e "/boot/firmware/kernel_2712.img" ]; then
+    echo "Boot kernel applied successfully on /boot/firmware/kernel_2712.img"
+fi
+if [ -e "/boot/kernel_2712.img" ]; then
+    cp -rf "/boot/firmware/kernel_2712.img" "/boot/kernel_2712.img"
+    echo "Boot kernel applied successfully on /boot/kernel_2712.img"
+fi
+if [ -e "/boot/firmware/vmlinuz" ]; then
+    cp -rf "/boot/vmlinuz-KERNEL_VERSION" "/boot/firmware/vmlinuz"
+    echo "Boot kernel applied successfully on /boot/firmware/vmlinuz"
+fi
+if [ -e "/boot/vmlinuz" ]; then
+    cp -rf "/boot/vmlinuz-KERNEL_VERSION" "/boot/vmlinuz"
+    echo "Boot kernel applied successfully on /boot/vmlinuz"
+fi
+if [ -e "/boot/firmware/initrd.img" ]; then
+    cp -rf "/boot/initrd.img-KERNEL_VERSION" "/boot/firmware/initrd.img"
+    echo "Boot Kernel initramfs applied successfully on /boot/firmware/initrd.img"
+fi
+if [ -e "/boot/initrd.img" ]; then
+    cp -rf "/boot/initrd.img-KERNEL_VERSION" "/boot/initrd.img"
+    echo "Boot Kernel initramfs applied successfully on /boot/initrd.img"
+fi
+
+echo ""
 echo ""
 echo ""
 echo "!!! You can get the backup of $BOOT_PATH in $OPT_PATH !!!"
@@ -149,6 +175,32 @@ done
 
 sed -i "/^set -e/a mkdir -p /boot/firmware.$BUILD_VERSION.bak/overlays" $DEB_PREBUILT/DEBIAN/preinst
 sed -i "/^set -e/a sed -i \"s|MODULES=dep|MODULES=most|g\" /etc/initramfs-tools/initramfs.conf" $DEB_PREBUILT/DEBIAN/preinst
+
+sed -i "/exit 0/i\
+if [ -e \"/boot/firmware/kernel_2712.img\" ]; then\n\
+    echo \"Boot kernel applied successfully on /boot/firmware/kernel_2712.img\"\n\
+fi\n\
+if [ -e \"/boot/kernel_2712.img\" ]; then\n\
+    cp -rf \"/boot/firmware/kernel_2712.img\" \"/boot/kernel_2712.img\"\n\
+    echo \"Boot kernel applied successfully on /boot/kernel_2712.img\"\n\
+fi\n\
+if [ -e \"/boot/firmware/vmlinuz\" ]; then\n\
+    cp -rf \"/boot/vmlinuz-$KERNEL_VERSION\" \"/boot/firmware/vmlinuz\"\n\
+    echo \"Boot kernel applied successfully on /boot/firmware/vmlinuz\"\n\
+fi\n\
+if [ -e \"/boot/vmlinuz\" ]; then\n\
+    cp -rf \"/boot/vmlinuz-$KERNEL_VERSION\" \"/boot/vmlinuz\"\n\
+    echo \"Boot kernel applied successfully on /boot/vmlinuz\"\n\
+fi\n\
+if [ -e \"/boot/firmware/initrd.img\" ]; then\n\
+    cp -rf \"/boot/initrd.img-$KERNEL_VERSION\" \"/boot/firmware/initrd.img\"\n\
+    echo \"Boot Kernel initramfs applied successfully on /boot/firmware/initrd.img\"\n\
+fi\n\
+if [ -e \"/boot/initrd.img\" ]; then\n\
+    cp -rf \"/boot/initrd.img-$KERNEL_VERSION\" \"/boot/initrd.img\"\n\
+    echo \"Boot Kernel initramfs applied successfully on /boot/initrd.img\"\n\
+fi\n\
+" $DEB_PREBUILT/DEBIAN/postinst
 
 sed -i "/^set -e/a\
 if [ \"\$1\" = \"remove\" ]; then\n\
