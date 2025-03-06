@@ -106,28 +106,17 @@ update-initramfs -c -k KERNEL_VERSION
 
 echo ""
 echo "Applying boot kernel..."
-if [ -e "/boot/firmware/kernel_2712.img" ]; then
-    echo "Boot kernel applied successfully on /boot/firmware/kernel_2712.img"
+
+if [ -e "$BOOT_PATH/kernel_2712.img" ]; then
+    echo "Boot kernel applied successfully on $BOOT_PATH/kernel_2712.img"
 fi
-if [ -e "/boot/kernel_2712.img" ]; then
-    cp -rf "/boot/firmware/kernel_2712.img" "/boot/kernel_2712.img"
-    echo "Boot kernel applied successfully on /boot/kernel_2712.img"
+if [ -e "$BOOT_PATH/vmlinuz" ]; then
+    cp -rf "$BOOT_PATH/vmlinuz-KERNEL_VERSION" "$BOOT_PATH/vmlinuz"
+    echo "Boot kernel applied successfully on $BOOT_PATH/vmlinuz"
 fi
-if [ -e "/boot/firmware/vmlinuz" ]; then
-    cp -rf "/boot/vmlinuz-KERNEL_VERSION" "/boot/firmware/vmlinuz"
-    echo "Boot kernel applied successfully on /boot/firmware/vmlinuz"
-fi
-if [ -e "/boot/vmlinuz" ]; then
-    cp -rf "/boot/vmlinuz-KERNEL_VERSION" "/boot/vmlinuz"
-    echo "Boot kernel applied successfully on /boot/vmlinuz"
-fi
-if [ -e "/boot/firmware/initrd.img" ]; then
-    cp -rf "/boot/initrd.img-KERNEL_VERSION" "/boot/firmware/initrd.img"
-    echo "Boot Kernel initramfs applied successfully on /boot/firmware/initrd.img"
-fi
-if [ -e "/boot/initrd.img" ]; then
-    cp -rf "/boot/initrd.img-KERNEL_VERSION" "/boot/initrd.img"
-    echo "Boot Kernel initramfs applied successfully on /boot/initrd.img"
+if [ -e "$BOOT_PATH/initrd.img" ]; then
+    cp -rf "$BOOT_PATH/initrd.img-KERNEL_VERSION" "$BOOT_PATH/initrd.img"
+    echo "Boot Kernel initramfs applied successfully on $BOOT_PATH/initrd.img"
 fi
 
 echo ""
@@ -190,36 +179,26 @@ fi\n\
 " $DEB_PREBUILT/DEBIAN/preinst
 
 sed -i "/exit 0/i\
+BOOT_PATH=\"\"\n\
 echo \"Detect boot sturucture...\"\n\
 if [ -e \"/boot/firmware/bootcode.bin\" ]; then\n\
     echo \"'/boot/firmware' found.\"\n\
+    BOOT_PATH=\"/boot/firmware\"\n\
 elif [ -e \"/boot/bootcode.bin\" ]; then\n\
     echo \"'/boot' found.\"\n\
+    BOOT_PATH=\"/boot\"\n\
     cp -rf /boot/firmware/* /boot/\n\
-    rm -rf /boot/firmware\n\
 fi\n\
-if [ -e \"/boot/firmware/kernel_2712.img\" ]; then\n\
-    echo \"Boot kernel applied successfully on /boot/firmware/kernel_2712.img\"\n\
+if [ -e \"\$BOOT_PATH/kernel_2712.img\" ]; then\n\
+    echo \"Boot kernel applied successfully on \$BOOT_PATH/kernel_2712.img\"\n\
 fi\n\
-if [ -e \"/boot/kernel_2712.img\" ]; then\n\
-    cp -rf \"/boot/firmware/kernel_2712.img\" \"/boot/kernel_2712.img\"\n\
-    echo \"Boot kernel applied successfully on /boot/kernel_2712.img\"\n\
+if [ -e \"\$BOOT_PATH/vmlinuz\" ]; then\n\
+    cp -rf \"\$BOOT_PATH/vmlinuz-$KERNEL_VERSION\" \"\$BOOT_PATH/vmlinuz\"\n\
+    echo \"Boot kernel applied successfully on \$BOOT_PATH/vmlinuz\"\n\
 fi\n\
-if [ -e \"/boot/firmware/vmlinuz\" ]; then\n\
-    cp -rf \"/boot/vmlinuz-$KERNEL_VERSION\" \"/boot/firmware/vmlinuz\"\n\
-    echo \"Boot kernel applied successfully on /boot/firmware/vmlinuz\"\n\
-fi\n\
-if [ -e \"/boot/vmlinuz\" ]; then\n\
-    cp -rf \"/boot/vmlinuz-$KERNEL_VERSION\" \"/boot/vmlinuz\"\n\
-    echo \"Boot kernel applied successfully on /boot/vmlinuz\"\n\
-fi\n\
-if [ -e \"/boot/firmware/initrd.img\" ]; then\n\
-    cp -rf \"/boot/initrd.img-$KERNEL_VERSION\" \"/boot/firmware/initrd.img\"\n\
-    echo \"Boot Kernel initramfs applied successfully on /boot/firmware/initrd.img\"\n\
-fi\n\
-if [ -e \"/boot/initrd.img\" ]; then\n\
-    cp -rf \"/boot/initrd.img-$KERNEL_VERSION\" \"/boot/initrd.img\"\n\
-    echo \"Boot Kernel initramfs applied successfully on /boot/initrd.img\"\n\
+if [ -e \"\$BOOT_PATH/initrd.img\" ]; then\n\
+    cp -rf \"\$BOOT_PATH/initrd.img-$KERNEL_VERSION\" \"\$BOOT_PATH/initrd.img\"\n\
+    echo \"Boot Kernel initramfs applied successfully on \$BOOT_PATH/initrd.img\"\n\
 fi\n\
 " $DEB_PREBUILT/DEBIAN/postinst
 
