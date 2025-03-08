@@ -2,7 +2,7 @@
 /*
  * Raspberry Pi HEVC driver
  *
- * Copyright (C) 2020 Raspberry Pi (Trading) Ltd
+ * Copyright (C) 2024 Raspberry Pi Ltd
  *
  * Based on the Cedrus VPU driver, that is:
  *
@@ -11,12 +11,12 @@
  * Copyright (C) 2018 Bootlin
  */
 
-#ifndef _RPIVID_HW_H_
-#define _RPIVID_HW_H_
+#ifndef _HEVC_D_HW_H_
+#define _HEVC_D_HW_H_
 
-struct rpivid_hw_irq_ent {
-	struct rpivid_hw_irq_ent *next;
-	rpivid_irq_callback cb;
+struct hevc_d_hw_irq_ent {
+	struct hevc_d_hw_irq_ent *next;
+	hevc_d_irq_callback cb;
 	void *v;
 };
 
@@ -77,52 +77,52 @@ struct rpivid_hw_irq_ent {
  * Write a general register value
  * Order is unimportant
  */
-static inline void apb_write(const struct rpivid_dev * const dev,
+static inline void apb_write(const struct hevc_d_dev * const dev,
 			     const unsigned int offset, const u32 val)
 {
 	writel_relaxed(val, dev->base_h265 + offset);
 }
 
 /* Write the final register value that actually starts the phase */
-static inline void apb_write_final(const struct rpivid_dev * const dev,
+static inline void apb_write_final(const struct hevc_d_dev * const dev,
 				   const unsigned int offset, const u32 val)
 {
 	writel(val, dev->base_h265 + offset);
 }
 
-static inline u32 apb_read(const struct rpivid_dev * const dev,
+static inline u32 apb_read(const struct hevc_d_dev * const dev,
 			   const unsigned int offset)
 {
 	return readl(dev->base_h265 + offset);
 }
 
-static inline void irq_write(const struct rpivid_dev * const dev,
+static inline void irq_write(const struct hevc_d_dev * const dev,
 			     const unsigned int offset, const u32 val)
 {
 	writel(val, dev->base_irq + offset);
 }
 
-static inline u32 irq_read(const struct rpivid_dev * const dev,
+static inline u32 irq_read(const struct hevc_d_dev * const dev,
 			   const unsigned int offset)
 {
 	return readl(dev->base_irq + offset);
 }
 
-static inline void apb_write_vc_addr(const struct rpivid_dev * const dev,
+static inline void apb_write_vc_addr(const struct hevc_d_dev * const dev,
 				     const unsigned int offset,
 				     const dma_addr_t a)
 {
 	apb_write(dev, offset, (u32)(a >> 6));
 }
 
-static inline void apb_write_vc_addr_final(const struct rpivid_dev * const dev,
+static inline void apb_write_vc_addr_final(const struct hevc_d_dev * const dev,
 					   const unsigned int offset,
 					   const dma_addr_t a)
 {
 	apb_write_final(dev, offset, (u32)(a >> 6));
 }
 
-static inline void apb_write_vc_len(const struct rpivid_dev * const dev,
+static inline void apb_write_vc_len(const struct hevc_d_dev * const dev,
 				    const unsigned int offset,
 				    const unsigned int x)
 {
@@ -273,31 +273,31 @@ static inline void apb_write_vc_len(const struct rpivid_dev * const dev,
 		ARG_IC_ICTRL_ACTIVE2_INT_SET)
 
 /* Regulate claim Q */
-void rpivid_hw_irq_active1_enable_claim(struct rpivid_dev *dev,
+void hevc_d_hw_irq_active1_enable_claim(struct hevc_d_dev *dev,
 					int n);
 /* Auto release once all CBs called */
-void rpivid_hw_irq_active1_claim(struct rpivid_dev *dev,
-				 struct rpivid_hw_irq_ent *ient,
-				 rpivid_irq_callback ready_cb, void *ctx);
+void hevc_d_hw_irq_active1_claim(struct hevc_d_dev *dev,
+				 struct hevc_d_hw_irq_ent *ient,
+				 hevc_d_irq_callback ready_cb, void *ctx);
 /* May only be called in claim cb */
-void rpivid_hw_irq_active1_irq(struct rpivid_dev *dev,
-			       struct rpivid_hw_irq_ent *ient,
-			       rpivid_irq_callback irq_cb, void *ctx);
+void hevc_d_hw_irq_active1_irq(struct hevc_d_dev *dev,
+			       struct hevc_d_hw_irq_ent *ient,
+			       hevc_d_irq_callback irq_cb, void *ctx);
 /* May only be called in irq cb */
-void rpivid_hw_irq_active1_thread(struct rpivid_dev *dev,
-				  struct rpivid_hw_irq_ent *ient,
-				  rpivid_irq_callback thread_cb, void *ctx);
+void hevc_d_hw_irq_active1_thread(struct hevc_d_dev *dev,
+				  struct hevc_d_hw_irq_ent *ient,
+				  hevc_d_irq_callback thread_cb, void *ctx);
 
 /* Auto release once all CBs called */
-void rpivid_hw_irq_active2_claim(struct rpivid_dev *dev,
-				 struct rpivid_hw_irq_ent *ient,
-				 rpivid_irq_callback ready_cb, void *ctx);
+void hevc_d_hw_irq_active2_claim(struct hevc_d_dev *dev,
+				 struct hevc_d_hw_irq_ent *ient,
+				 hevc_d_irq_callback ready_cb, void *ctx);
 /* May only be called in claim cb */
-void rpivid_hw_irq_active2_irq(struct rpivid_dev *dev,
-			       struct rpivid_hw_irq_ent *ient,
-			       rpivid_irq_callback irq_cb, void *ctx);
+void hevc_d_hw_irq_active2_irq(struct hevc_d_dev *dev,
+			       struct hevc_d_hw_irq_ent *ient,
+			       hevc_d_irq_callback irq_cb, void *ctx);
 
-int rpivid_hw_probe(struct rpivid_dev *dev);
-void rpivid_hw_remove(struct rpivid_dev *dev);
+int hevc_d_hw_probe(struct hevc_d_dev *dev);
+void hevc_d_hw_remove(struct hevc_d_dev *dev);
 
 #endif

@@ -2,7 +2,7 @@
 /*
  * Raspberry Pi HEVC driver
  *
- * Copyright (C) 2020 Raspberry Pi (Trading) Ltd
+ * Copyright (C) 2020 Raspberry Pi Ltd
  *
  * Based on the Cedrus VPU driver, that is:
  *
@@ -16,34 +16,10 @@
 
 #include <media/videobuf2-dma-contig.h>
 
-#include "rpivid.h"
-#include "rpivid_hw.h"
-#include "rpivid_video.h"
-
-#define DEBUG_TRACE_P1_CMD 0
-#define DEBUG_TRACE_EXECUTION 0
-
-#define USE_REQUEST_PIN 1
-
-#if DEBUG_TRACE_EXECUTION
-#define xtrace_in(dev_, de_)\
-	v4l2_info(&(dev_)->v4l2_dev, "%s[%d]: in\n",   __func__,\
-		  (de_) == NULL ? -1 : (de_)->decode_order)
-#define xtrace_ok(dev_, de_)\
-	v4l2_info(&(dev_)->v4l2_dev, "%s[%d]: ok\n",   __func__,\
-		  (de_) == NULL ? -1 : (de_)->decode_order)
-#define xtrace_fin(dev_, de_)\
-	v4l2_info(&(dev_)->v4l2_dev, "%s[%d]: finish\n", __func__,\
-		  (de_) == NULL ? -1 : (de_)->decode_order)
-#define xtrace_fail(dev_, de_)\
-	v4l2_info(&(dev_)->v4l2_dev, "%s[%d]: FAIL\n", __func__,\
-		  (de_) == NULL ? -1 : (de_)->decode_order)
-#else
-#define xtrace_in(dev_, de_)
-#define xtrace_ok(dev_, de_)
-#define xtrace_fin(dev_, de_)
-#define xtrace_fail(dev_, de_)
-#endif
+#include "hevc_d.h"
+#include "hevc_d_h265.h"
+#include "hevc_d_hw.h"
+#include "hevc_d_video.h"
 
 enum hevc_slice_type {
 	HEVC_SLICE_B = 0,
@@ -53,7 +29,7 @@ enum hevc_slice_type {
 
 enum hevc_layer { L0 = 0, L1 = 1 };
 
-static int gptr_alloc(struct rpivid_dev *const dev, struct rpivid_gptr *gptr,
+static int gptr_alloc(struct hevc_d_dev *const dev, struct hevc_d_gptr *gptr,
 		      size_t size, unsigned long attrs)
 {
 	gptr->size = size;
@@ -64,8 +40,8 @@ static int gptr_alloc(struct rpivid_dev *const dev, struct rpivid_gptr *gptr,
 	return !gptr->ptr ? -ENOMEM : 0;
 }
 
-static void gptr_free(struct rpivid_dev *const dev,
-		      struct rpivid_gptr *const gptr)
+static void gptr_free(struct hevc_d_dev *const dev,
+		      struct hevc_d_gptr *const gptr)
 {
 	if (gptr->ptr)
 		dma_free_attrs(dev->dev, gptr->size, gptr->ptr, gptr->addr,
@@ -83,8 +59,8 @@ static void gptr_free(struct rpivid_dev *const dev,
  * On error then check gptr->ptr to determine if anything is currently
  * allocated.
  */
-static int gptr_realloc_new(struct rpivid_dev * const dev,
-			    struct rpivid_gptr * const gptr, size_t size)
+static int gptr_realloc_new(struct hevc_d_dev * const dev,
+			    struct hevc_d_gptr * const gptr, size_t size)
 {
 	const size_t old_size = gptr->size;
 
@@ -118,7 +94,7 @@ static int gptr_realloc_new(struct rpivid_dev * const dev,
 
 static size_t next_size(const size_t x)
 {
-	return rpivid_round_up_size(x + 1);
+	return hevc_d_round_up_size(x + 1);
 }
 
 #define NUM_SCALING_FACTORS 4064 /* Not a typo = 0xbe0 + 0x400 */
@@ -130,36 +106,30 @@ static size_t next_size(const size_t x)
 
 #define HEVC_MAX_REFS V4L2_HEVC_DPB_ENTRIES_NUM_MAX
 
-//////////////////////////////////////////////////////////////////////////////
-
 struct rpi_cmd {
 	u32 addr;
 	u32 data;
 } __packed;
 
-struct rpivid_q_aux {
+struct hevc_d_q_aux {
 	unsigned int refcount;
 	unsigned int q_index;
-	struct rpivid_q_aux *next;
-	struct rpivid_gptr col;
+	struct hevc_d_q_aux *next;
+	struct hevc_d_gptr col;
 };
 
-//////////////////////////////////////////////////////////////////////////////
-
-enum rpivid_decode_state {
-	RPIVID_DECODE_SLICE_START,
-	RPIVID_DECODE_SLICE_CONTINUE,
-	RPIVID_DECODE_ERROR_CONTINUE,
-	RPIVID_DECODE_ERROR_DONE,
-	RPIVID_DECODE_PHASE1,
-	RPIVID_DECODE_END,
+enum hevc_d_decode_state {
+	HEVC_D_DECODE_SLICE_START,
+	HEVC_D_DECODE_ERROR_DONE,
+	HEVC_D_DECODE_PHASE1,
+	HEVC_D_DECODE_END,
 };
 
-struct rpivid_dec_env {
-	struct rpivid_ctx *ctx;
-	struct rpivid_dec_env *next;
+struct hevc_d_dec_env {
+	struct hevc_d_ctx *ctx;
+	struct hevc_d_dec_env *next;
 
-	enum rpivid_decode_state state;
+	enum hevc_d_decode_state state;
 	unsigned int decode_order;
 	int p1_status;		/* P1 status - what to realloc */
 
@@ -187,14 +157,15 @@ struct rpivid_dec_env {
 	u32 rpi_framesize;
 	u32 rpi_currpoc;
 
-	struct vb2_v4l2_buffer *frame_buf; // Detached dest buffer
-	struct vb2_v4l2_buffer *src_buf;   // Detached src buffer
-	unsigned int frame_c_offset;
-	unsigned int frame_stride;
-	dma_addr_t frame_addr;
-	dma_addr_t ref_addrs[16];
-	struct rpivid_q_aux *frame_aux;
-	struct rpivid_q_aux *col_aux;
+	struct vb2_v4l2_buffer *frame_buf;
+	struct vb2_v4l2_buffer *src_buf;
+	dma_addr_t frame_luma_addr;
+	unsigned int luma_stride;
+	dma_addr_t frame_chroma_addr;
+	unsigned int chroma_stride;
+	dma_addr_t ref_addrs[16][2];
+	struct hevc_d_q_aux *frame_aux;
+	struct hevc_d_q_aux *col_aux;
 
 	dma_addr_t cmd_addr;
 	size_t cmd_size;
@@ -204,28 +175,19 @@ struct rpivid_dec_env {
 	u32 pu_stride;
 	u32 coeff_stride;
 
-	struct rpivid_gptr *bit_copy_gptr;
-	size_t bit_copy_len;
-
 #define SLICE_MSGS_MAX (2 * HEVC_MAX_REFS * 8 + 3)
 	u16 slice_msgs[SLICE_MSGS_MAX];
 	u8 scaling_factors[NUM_SCALING_FACTORS];
 
-#if USE_REQUEST_PIN
 	struct media_request *req_pin;
-#else
-	struct media_request_object *req_obj;
-#endif
-	struct rpivid_hw_irq_ent irq_ent;
+	struct hevc_d_hw_irq_ent irq_ent;
 };
 
-#define member_size(type, member) sizeof(((type *)0)->member)
-
-struct rpivid_dec_state {
+struct hevc_d_dec_state {
 	struct v4l2_ctrl_hevc_sps sps;
 	struct v4l2_ctrl_hevc_pps pps;
 
-	// Helper vars & tables derived from sps/pps
+	/* Helper vars & tables derived from sps/pps */
 	unsigned int log2_ctb_size;     /* log2 width of a CTB */
 	unsigned int ctb_width;         /* Width in CTBs */
 	unsigned int ctb_height;        /* Height in CTBs */
@@ -238,19 +200,17 @@ struct rpivid_dec_state {
 	int *ctb_addr_rs_to_ts;
 	int *ctb_addr_ts_to_rs;
 
-	// Aux starage for DPB
-	// Hold refs
-	struct rpivid_q_aux *ref_aux[HEVC_MAX_REFS];
-	struct rpivid_q_aux *frame_aux;
+	/* Aux starage for DPB */
+	struct hevc_d_q_aux *ref_aux[HEVC_MAX_REFS];
+	struct hevc_d_q_aux *frame_aux;
 
-	// Slice vars
+	/* Slice vars */
 	unsigned int slice_idx;
 	bool slice_temporal_mvp;  /* Slice flag but constant for frame */
 	bool use_aux;
 	bool mk_aux;
 
-	// Temp vars per run - don't actually need to persist
-	u8 *src_buf;
+	/* Temp vars per run - don't actually need to persist */
 	dma_addr_t src_addr;
 	const struct v4l2_ctrl_hevc_slice_params *sh;
 	const struct v4l2_ctrl_hevc_decode_params *dec;
@@ -266,30 +226,13 @@ struct rpivid_dec_state {
 	unsigned int prev_ctb_y;
 };
 
-#if !USE_REQUEST_PIN
-static void dst_req_obj_release(struct media_request_object *object)
-{
-	kfree(object);
-}
-
-static const struct media_request_object_ops dst_req_obj_ops = {
-	.release = dst_req_obj_release,
-};
-#endif
-
 static inline int clip_int(const int x, const int lo, const int hi)
 {
 	return x < lo ? lo : x > hi ? hi : x;
 }
 
-//////////////////////////////////////////////////////////////////////////////
-// Phase 1 command and bit FIFOs
-
-#if DEBUG_TRACE_P1_CMD
-static int p1_z;
-#endif
-
-static int cmds_check_space(struct rpivid_dec_env *const de, unsigned int n)
+/* Phase 1 command and bit FIFOs */
+static int cmds_check_space(struct hevc_d_dec_env *const de, unsigned int n)
 {
 	struct rpi_cmd *a;
 	unsigned int newmax;
@@ -322,7 +265,7 @@ static int cmds_check_space(struct rpivid_dec_env *const de, unsigned int n)
 }
 
 // ???? u16 addr - put in u32
-static void p1_apb_write(struct rpivid_dec_env *const de, const u16 addr,
+static void p1_apb_write(struct hevc_d_dec_env *const de, const u16 addr,
 			 const u32 data)
 {
 	if (de->cmd_len >= de->cmd_max) {
@@ -334,12 +277,6 @@ static void p1_apb_write(struct rpivid_dec_env *const de, const u16 addr,
 	de->cmd_fifo[de->cmd_len].addr = addr;
 	de->cmd_fifo[de->cmd_len].data = data;
 
-#if DEBUG_TRACE_P1_CMD
-	if (++p1_z < 256) {
-		v4l2_info(&de->ctx->dev->v4l2_dev, "[%02x] %x %x\n",
-			  de->cmd_len, addr, data);
-	}
-#endif
 	de->cmd_len++;
 }
 
@@ -348,36 +285,37 @@ static int ctb_to_tile(unsigned int ctb, unsigned int *bd, int num)
 	int i;
 
 	for (i = 1; ctb >= bd[i]; i++)
-		; // bd[] has num+1 elements; bd[0]=0;
+		; /* bd[] has num+1 elements; bd[0]=0; */
+
 	return i - 1;
 }
 
-static unsigned int ctb_to_tile_x(const struct rpivid_dec_state *const s,
+static unsigned int ctb_to_tile_x(const struct hevc_d_dec_state *const s,
 				  const unsigned int ctb_x)
 {
 	return ctb_to_tile(ctb_x, s->col_bd, s->tile_width);
 }
 
-static unsigned int ctb_to_tile_y(const struct rpivid_dec_state *const s,
+static unsigned int ctb_to_tile_y(const struct hevc_d_dec_state *const s,
 				  const unsigned int ctb_y)
 {
 	return ctb_to_tile(ctb_y, s->row_bd, s->tile_height);
 }
 
-static void aux_q_free(struct rpivid_ctx *const ctx,
-		       struct rpivid_q_aux *const aq)
+static void aux_q_free(struct hevc_d_ctx *const ctx,
+		       struct hevc_d_q_aux *const aq)
 {
-	struct rpivid_dev *const dev = ctx->dev;
+	struct hevc_d_dev *const dev = ctx->dev;
 
 	gptr_free(dev, &aq->col);
 	kfree(aq);
 }
 
-static struct rpivid_q_aux *aux_q_alloc(struct rpivid_ctx *const ctx,
+static struct hevc_d_q_aux *aux_q_alloc(struct hevc_d_ctx *const ctx,
 					const unsigned int q_index)
 {
-	struct rpivid_dev *const dev = ctx->dev;
-	struct rpivid_q_aux *const aq = kzalloc(sizeof(*aq), GFP_KERNEL);
+	struct hevc_d_dev *const dev = ctx->dev;
+	struct hevc_d_q_aux *const aq = kzalloc(sizeof(*aq), GFP_KERNEL);
 
 	if (!aq)
 		return NULL;
@@ -400,10 +338,10 @@ fail:
 	return NULL;
 }
 
-static struct rpivid_q_aux *aux_q_new(struct rpivid_ctx *const ctx,
+static struct hevc_d_q_aux *aux_q_new(struct hevc_d_ctx *const ctx,
 				      const unsigned int q_index)
 {
-	struct rpivid_q_aux *aq;
+	struct hevc_d_q_aux *aq;
 	unsigned long lockflags;
 
 	spin_lock_irqsave(&ctx->aux_lock, lockflags);
@@ -411,14 +349,18 @@ static struct rpivid_q_aux *aux_q_new(struct rpivid_ctx *const ctx,
 	 * If we already have this allocated to a slot then use that
 	 * and assume that it will all work itself out in the pipeline
 	 */
-	if ((aq = ctx->aux_ents[q_index]) != NULL) {
+	aq = ctx->aux_ents[q_index];
+	if (aq) {
 		++aq->refcount;
-	} else if ((aq = ctx->aux_free) != NULL) {
-		ctx->aux_free = aq->next;
-		aq->next = NULL;
-		aq->refcount = 1;
-		aq->q_index = q_index;
-		ctx->aux_ents[q_index] = aq;
+	} else {
+		aq = ctx->aux_free;
+		if (aq) {
+			ctx->aux_free = aq->next;
+			aq->next = NULL;
+			aq->refcount = 1;
+			aq->q_index = q_index;
+			ctx->aux_ents[q_index] = aq;
+		}
 	}
 	spin_unlock_irqrestore(&ctx->aux_lock, lockflags);
 
@@ -428,39 +370,38 @@ static struct rpivid_q_aux *aux_q_new(struct rpivid_ctx *const ctx,
 	return aq;
 }
 
-static struct rpivid_q_aux *aux_q_ref_idx(struct rpivid_ctx *const ctx,
+static struct hevc_d_q_aux *aux_q_ref_idx(struct hevc_d_ctx *const ctx,
 					  const int q_index)
 {
 	unsigned long lockflags;
-	struct rpivid_q_aux *aq;
+	struct hevc_d_q_aux *aq;
 
 	spin_lock_irqsave(&ctx->aux_lock, lockflags);
-	if ((aq = ctx->aux_ents[q_index]) != NULL)
+	aq = ctx->aux_ents[q_index];
+	if (aq)
 		++aq->refcount;
 	spin_unlock_irqrestore(&ctx->aux_lock, lockflags);
 
 	return aq;
 }
 
-static struct rpivid_q_aux *aux_q_ref(struct rpivid_ctx *const ctx,
-				      struct rpivid_q_aux *const aq)
+static struct hevc_d_q_aux *aux_q_ref(struct hevc_d_ctx *const ctx,
+				      struct hevc_d_q_aux *const aq)
 {
+	unsigned long lockflags;
+
 	if (aq) {
-		unsigned long lockflags;
-
 		spin_lock_irqsave(&ctx->aux_lock, lockflags);
-
 		++aq->refcount;
-
 		spin_unlock_irqrestore(&ctx->aux_lock, lockflags);
 	}
 	return aq;
 }
 
-static void aux_q_release(struct rpivid_ctx *const ctx,
-			  struct rpivid_q_aux **const paq)
+static void aux_q_release(struct hevc_d_ctx *const ctx,
+			  struct hevc_d_q_aux **const paq)
 {
-	struct rpivid_q_aux *const aq = *paq;
+	struct hevc_d_q_aux *const aq = *paq;
 	unsigned long lockflags;
 
 	if (!aq)
@@ -478,15 +419,15 @@ static void aux_q_release(struct rpivid_ctx *const ctx,
 	spin_unlock_irqrestore(&ctx->aux_lock, lockflags);
 }
 
-static void aux_q_init(struct rpivid_ctx *const ctx)
+static void aux_q_init(struct hevc_d_ctx *const ctx)
 {
 	spin_lock_init(&ctx->aux_lock);
 	ctx->aux_free = NULL;
 }
 
-static void aux_q_uninit(struct rpivid_ctx *const ctx)
+static void aux_q_uninit(struct hevc_d_ctx *const ctx)
 {
-	struct rpivid_q_aux *aq;
+	struct hevc_d_q_aux *aq;
 
 	ctx->colmv_picsize = 0;
 	ctx->colmv_stride = 0;
@@ -495,8 +436,6 @@ static void aux_q_uninit(struct rpivid_ctx *const ctx)
 		aux_q_free(ctx, aq);
 	}
 }
-
-//////////////////////////////////////////////////////////////////////////////
 
 /*
  * Initialisation process for context variables (CABAC init)
@@ -558,18 +497,18 @@ static const u8 prob_init[3][156] = {
 };
 
 #define CMDS_WRITE_PROB ((RPI_PROB_ARRAY_SIZE / 4) + 1)
-static void write_prob(struct rpivid_dec_env *const de,
-		       const struct rpivid_dec_state *const s)
-{
-	u8 dst[RPI_PROB_ARRAY_SIZE];
 
+static void write_prob(struct hevc_d_dec_env *const de,
+		       const struct hevc_d_dec_state *const s)
+{
 	const unsigned int init_type =
 		((s->sh->flags & V4L2_HEVC_SLICE_PARAMS_FLAG_CABAC_INIT) != 0 &&
 		 s->sh->slice_type != HEVC_SLICE_I) ?
 			s->sh->slice_type + 1 :
 			2 - s->sh->slice_type;
-	const u8 *p = prob_init[init_type];
 	const int q = clip_int(s->slice_qp, 0, 51);
+	const u8 *p = prob_init[init_type];
+	u8 dst[RPI_PROB_ARRAY_SIZE];
 	unsigned int i;
 
 	for (i = 0; i < RPI_PROB_VALS; i++) {
@@ -602,10 +541,10 @@ static void write_prob(struct rpivid_dec_env *const de,
 }
 
 #define CMDS_WRITE_SCALING_FACTORS NUM_SCALING_FACTORS
-static void write_scaling_factors(struct rpivid_dec_env *const de)
+static void write_scaling_factors(struct hevc_d_dec_env *const de)
 {
-	int i;
 	const u8 *p = (u8 *)de->scaling_factors;
+	int i;
 
 	for (i = 0; i < NUM_SCALING_FACTORS; i += 4, p += 4)
 		p1_apb_write(de, 0x2000 + i,
@@ -618,9 +557,10 @@ static inline __u32 dma_to_axi_addr(dma_addr_t a)
 }
 
 #define CMDS_WRITE_BITSTREAM 4
-static int write_bitstream(struct rpivid_dec_env *const de,
-			   const struct rpivid_dec_state *const s)
+static int write_bitstream(struct hevc_d_dec_env *const de,
+			   const struct hevc_d_dec_state *const s)
 {
+	// FIXME!!!!
 	// Note that FFmpeg V4L2 does not remove emulation prevention bytes,
 	// so this is matched in the configuration here.
 	// Whether that is the correct behaviour or not is not clear in the
@@ -628,23 +568,8 @@ static int write_bitstream(struct rpivid_dec_env *const de,
 	const int rpi_use_emu = 1;
 	unsigned int offset = s->sh->data_byte_offset;
 	const unsigned int len = (s->sh->bit_size + 7) / 8 - offset;
-	dma_addr_t addr;
+	dma_addr_t addr = s->src_addr + offset;
 
-	if (s->src_addr != 0) {
-		addr = s->src_addr + offset;
-	} else {
-		if (len + de->bit_copy_len > de->bit_copy_gptr->size) {
-			v4l2_warn(&de->ctx->dev->v4l2_dev,
-				  "Bit copy buffer overflow: size=%zu, offset=%zu, len=%u\n",
-				  de->bit_copy_gptr->size,
-				  de->bit_copy_len, len);
-			return -ENOMEM;
-		}
-		memcpy(de->bit_copy_gptr->ptr + de->bit_copy_len,
-		       s->src_buf + offset, len);
-		addr = de->bit_copy_gptr->addr + de->bit_copy_len;
-		de->bit_copy_len += (len + 63) & ~63;
-	}
 	offset = addr & 63;
 
 	p1_apb_write(de, RPI_BFBASE, dma_to_axi_addr(addr));
@@ -654,13 +579,11 @@ static int write_bitstream(struct rpivid_dec_env *const de,
 	return 0;
 }
 
-//////////////////////////////////////////////////////////////////////////////
-
 /*
  * The slice constant part of the slice register - width and height need to
  * be ORed in later as they are per-tile / WPP-row
  */
-static u32 slice_reg_const(const struct rpivid_dec_state *const s)
+static u32 slice_reg_const(const struct hevc_d_dec_state *const s)
 {
 	u32 x = (s->max_num_merge_cand << 0) |
 		(s->nb_refs[L0] << 4) |
@@ -678,11 +601,10 @@ static u32 slice_reg_const(const struct rpivid_dec_state *const s)
 	return x;
 }
 
-//////////////////////////////////////////////////////////////////////////////
-
 #define CMDS_NEW_SLICE_SEGMENT (4 + CMDS_WRITE_SCALING_FACTORS)
-static void new_slice_segment(struct rpivid_dec_env *const de,
-			      const struct rpivid_dec_state *const s)
+
+static void new_slice_segment(struct hevc_d_dec_env *const de,
+			      const struct hevc_d_dec_state *const s)
 {
 	const struct v4l2_ctrl_hevc_sps *const sps = &s->sps;
 	const struct v4l2_ctrl_hevc_pps *const pps = &s->pps;
@@ -757,16 +679,15 @@ static void new_slice_segment(struct rpivid_dec_env *const de,
 	p1_apb_write(de, RPI_SLICESTART, de->reg_slicestart);
 }
 
-//////////////////////////////////////////////////////////////////////////////
-// Slice messages
+/* Slice messages */
 
-static void msg_slice(struct rpivid_dec_env *const de, const u16 msg)
+static void msg_slice(struct hevc_d_dec_env *const de, const u16 msg)
 {
 	de->slice_msgs[de->num_slice_msgs++] = msg;
 }
 
 #define CMDS_PROGRAM_SLICECMDS (1 + SLICE_MSGS_MAX)
-static void program_slicecmds(struct rpivid_dec_env *const de,
+static void program_slicecmds(struct hevc_d_dec_env *const de,
 			      const int sliceid)
 {
 	int i;
@@ -777,8 +698,7 @@ static void program_slicecmds(struct rpivid_dec_env *const de,
 		p1_apb_write(de, 0x4000 + 4 * i, de->slice_msgs[i] & 0xffff);
 }
 
-// NoBackwardPredictionFlag 8.3.5
-// Simply checks POCs
+/* NoBackwardPredictionFlag 8.3.5 - Simply checks POCs */
 static int has_backward(const struct v4l2_hevc_dpb_entry *const dpb,
 			const __u8 *const idx, const unsigned int n,
 			const s32 cur_poc)
@@ -792,8 +712,8 @@ static int has_backward(const struct v4l2_hevc_dpb_entry *const dpb,
 	return 1;
 }
 
-static void pre_slice_decode(struct rpivid_dec_env *const de,
-			     const struct rpivid_dec_state *const s)
+static void pre_slice_decode(struct hevc_d_dec_env *const de,
+			     const struct hevc_d_dec_state *const s)
 {
 	const struct v4l2_ctrl_hevc_slice_params *const sh = s->sh;
 	const struct v4l2_ctrl_hevc_decode_params *const dec = s->dec;
@@ -821,7 +741,7 @@ static void pre_slice_decode(struct rpivid_dec_env *const de,
 	cmd_slice |= collocated_from_l0_flag << 14;
 
 	if (sh->slice_type == HEVC_SLICE_P || sh->slice_type == HEVC_SLICE_B) {
-		// Flag to say all reference pictures are from the past
+		/* Flag to say all reference pictures are from the past */
 		const int no_backward_pred_flag =
 			has_backward(dec->dpb, sh->ref_idx_l0, s->nb_refs[L0],
 				     sh->slice_pic_order_cnt) &&
@@ -834,13 +754,9 @@ static void pre_slice_decode(struct rpivid_dec_env *const de,
 			const __u8 *const rpl = collocated_from_l0_flag ?
 						sh->ref_idx_l0 : sh->ref_idx_l1;
 			de->dpbno_col = rpl[sh->collocated_ref_idx];
-			//v4l2_info(&de->ctx->dev->v4l2_dev,
-			//	    "L0=%d col_ref_idx=%d,
-			//          dpb_no=%d\n", collocated_from_l0_flag,
-			//          sh->collocated_ref_idx, de->dpbno_col);
 		}
 
-		// Write reference picture descriptions
+		/* Write reference picture descriptions */
 		weighted_pred_flag =
 			sh->slice_type == HEVC_SLICE_P ?
 				!!(s->pps.flags & V4L2_HEVC_PPS_FLAG_WEIGHTED_PRED) :
@@ -848,8 +764,6 @@ static void pre_slice_decode(struct rpivid_dec_env *const de,
 
 		for (idx = 0; idx < s->nb_refs[L0]; ++idx) {
 			unsigned int dpb_no = sh->ref_idx_l0[idx];
-			//v4l2_info(&de->ctx->dev->v4l2_dev,
-			//	  "L0[%d]=dpb[%d]\n", idx, dpb_no);
 
 			msg_slice(de,
 				  dpb_no |
@@ -895,8 +809,7 @@ static void pre_slice_decode(struct rpivid_dec_env *const de,
 
 		for (idx = 0; idx < s->nb_refs[L1]; ++idx) {
 			unsigned int dpb_no = sh->ref_idx_l1[idx];
-			//v4l2_info(&de->ctx->dev->v4l2_dev,
-			//          "L1[%d]=dpb[%d]\n", idx, dpb_no);
+
 			msg_slice(de,
 				  dpb_no |
 				  ((dec->dpb[dpb_no].flags &
@@ -954,12 +867,12 @@ static void pre_slice_decode(struct rpivid_dec_env *const de,
 						1 << 10 : 0));
 
 	msg_slice(de, ((sh->slice_cr_qp_offset & 31) << 5) +
-		       (sh->slice_cb_qp_offset & 31)); // CMD_QPOFF
+		       (sh->slice_cb_qp_offset & 31)); /* CMD_QPOFF */
 }
 
 #define CMDS_WRITE_SLICE 1
-static void write_slice(struct rpivid_dec_env *const de,
-			const struct rpivid_dec_state *const s,
+static void write_slice(struct hevc_d_dec_env *const de,
+			const struct hevc_d_dec_state *const s,
 			const u32 slice_const,
 			const unsigned int ctb_col,
 			const unsigned int ctb_row)
@@ -984,8 +897,9 @@ static void write_slice(struct rpivid_dec_env *const de,
  * use any state data that may change from slice to slice (e.g. qp)
  */
 #define CMDS_NEW_ENTRY_POINT (6 + CMDS_WRITE_SLICE)
-static void new_entry_point(struct rpivid_dec_env *const de,
-			    const struct rpivid_dec_state *const s,
+
+static void new_entry_point(struct hevc_d_dec_env *const de,
+			    const struct hevc_d_dec_state *const s,
 			    const bool do_bte,
 			    const bool reset_qp_y,
 			    const u32 pause_mode,
@@ -1031,11 +945,10 @@ static void new_entry_point(struct rpivid_dec_env *const de,
 	de->entry_slice = slice_const;
 }
 
-//////////////////////////////////////////////////////////////////////////////
-// Wavefront mode
+/* Wavefront mode */
 
 #define CMDS_WPP_PAUSE 4
-static void wpp_pause(struct rpivid_dec_env *const de, int ctb_row)
+static void wpp_pause(struct hevc_d_dec_env *const de, int ctb_row)
 {
 	p1_apb_write(de, RPI_STATUS, (ctb_row << 18) | 0x25);
 	p1_apb_write(de, RPI_TRANSFER, PROB_BACKUP);
@@ -1046,8 +959,8 @@ static void wpp_pause(struct rpivid_dec_env *const de, int ctb_row)
 }
 
 #define CMDS_WPP_ENTRY_FILL_1 (CMDS_WPP_PAUSE + 2 + CMDS_NEW_ENTRY_POINT)
-static int wpp_entry_fill(struct rpivid_dec_env *const de,
-			  const struct rpivid_dec_state *const s,
+static int wpp_entry_fill(struct hevc_d_dec_env *const de,
+			  const struct hevc_d_dec_state *const s,
 			  const unsigned int last_y)
 {
 	int rv;
@@ -1078,8 +991,8 @@ static int wpp_entry_fill(struct rpivid_dec_env *const de,
 	return 0;
 }
 
-static int wpp_end_previous_slice(struct rpivid_dec_env *const de,
-				  const struct rpivid_dec_state *const s)
+static int wpp_end_previous_slice(struct hevc_d_dec_env *const de,
+				  const struct hevc_d_dec_state *const s)
 {
 	int rv;
 
@@ -1103,11 +1016,12 @@ static int wpp_end_previous_slice(struct rpivid_dec_env *const de,
 	return 0;
 }
 
-/* Only main profile supported so WPP => !Tiles which makes some of the
+/*
+ * Only main profile supported so WPP => !Tiles which makes some of the
  * next chunk code simpler
  */
-static int wpp_decode_slice(struct rpivid_dec_env *const de,
-			    const struct rpivid_dec_state *const s,
+static int wpp_decode_slice(struct hevc_d_dec_env *const de,
+			    const struct hevc_d_dec_state *const s,
 			    bool last_slice)
 {
 	bool reset_qp_y = true;
@@ -1166,12 +1080,11 @@ static int wpp_decode_slice(struct rpivid_dec_env *const de,
 	return 0;
 }
 
-//////////////////////////////////////////////////////////////////////////////
-// Tiles mode
+/* Tiles mode */
 
-// Guarantees 1 cmd entry free on exit
-static int tile_entry_fill(struct rpivid_dec_env *const de,
-			   const struct rpivid_dec_state *const s,
+/* Guarantees 1 cmd entry free on exit */
+static int tile_entry_fill(struct hevc_d_dec_env *const de,
+			   const struct hevc_d_dec_state *const s,
 			   const unsigned int last_tile_x,
 			   const unsigned int last_tile_y)
 {
@@ -1184,7 +1097,7 @@ static int tile_entry_fill(struct rpivid_dec_env *const de,
 		const unsigned int last_x = s->col_bd[t_x + 1] - 1;
 		const unsigned int last_y = s->row_bd[t_y + 1] - 1;
 
-		// One more than needed here
+		/* One more than needed here */
 		rv = cmds_check_space(de, CMDS_NEW_ENTRY_POINT + 3);
 		if (rv)
 			return rv;
@@ -1206,11 +1119,9 @@ static int tile_entry_fill(struct rpivid_dec_env *const de,
 	return 0;
 }
 
-/*
- * Write STATUS register with expected end CTU address of previous slice
- */
-static int end_previous_slice(struct rpivid_dec_env *const de,
-			      const struct rpivid_dec_state *const s)
+/* Write STATUS register with expected end CTU address of previous slice */
+static int end_previous_slice(struct hevc_d_dec_env *const de,
+			      const struct hevc_d_dec_state *const s)
 {
 	int rv;
 
@@ -1225,8 +1136,8 @@ static int end_previous_slice(struct rpivid_dec_env *const de,
 	return 0;
 }
 
-static int decode_slice(struct rpivid_dec_env *const de,
-			const struct rpivid_dec_state *const s,
+static int decode_slice(struct hevc_d_dec_env *const de,
+			const struct hevc_d_dec_state *const s,
 			bool last_slice)
 {
 	bool reset_qp_y;
@@ -1286,8 +1197,7 @@ static int decode_slice(struct rpivid_dec_env *const de,
 	return 0;
 }
 
-//////////////////////////////////////////////////////////////////////////////
-// Scaling factors
+/* Scaling factors */
 
 static void expand_scaling_list(const unsigned int size_id,
 				u8 *const dst0,
@@ -1334,25 +1244,26 @@ static void expand_scaling_list(const unsigned int size_id,
 	}
 }
 
-static void populate_scaling_factors(const struct rpivid_run *const run,
-				     struct rpivid_dec_env *const de,
-				     const struct rpivid_dec_state *const s)
+static void populate_scaling_factors(const struct hevc_d_run *const run,
+				     struct hevc_d_dec_env *const de,
+				     const struct hevc_d_dec_state *const s)
 {
 	const struct v4l2_ctrl_hevc_scaling_matrix *const sl =
 		run->h265.scaling_matrix;
-	// Array of constants for scaling factors
+	/* Array of constants for scaling factors */
 	static const u32 scaling_factor_offsets[4][6] = {
-		// MID0    MID1    MID2    MID3    MID4    MID5
-		// SID0 (4x4)
+		/*
+		 * MID0    MID1    MID2    MID3    MID4    MID5
+		 */
+		/* SID0 (4x4) */
 		{ 0x0000, 0x0010, 0x0020, 0x0030, 0x0040, 0x0050 },
-		// SID1 (8x8)
+		/* SID1 (8x8) */
 		{ 0x0060, 0x00A0, 0x00E0, 0x0120, 0x0160, 0x01A0 },
-		// SID2 (16x16)
+		/* SID2 (16x16) */
 		{ 0x01E0, 0x02E0, 0x03E0, 0x04E0, 0x05E0, 0x06E0 },
-		// SID3 (32x32)
+		/* SID3 (32x32) */
 		{ 0x07E0, 0x0BE0, 0x0000, 0x0000, 0x0000, 0x0000 }
 	};
-
 	unsigned int mid;
 
 	for (mid = 0; mid < 6; mid++)
@@ -1375,7 +1286,7 @@ static void populate_scaling_factors(const struct rpivid_run *const run,
 				    sl->scaling_list_dc_coef_32x32[mid]);
 }
 
-static void free_ps_info(struct rpivid_dec_state *const s)
+static void free_ps_info(struct hevc_d_dec_state *const s)
 {
 	kfree(s->ctb_addr_rs_to_ts);
 	s->ctb_addr_rs_to_ts = NULL;
@@ -1388,19 +1299,19 @@ static void free_ps_info(struct rpivid_dec_state *const s)
 	s->row_bd = NULL;
 }
 
-static unsigned int tile_width(const struct rpivid_dec_state *const s,
+static unsigned int tile_width(const struct hevc_d_dec_state *const s,
 			       const unsigned int t_x)
 {
 	return s->col_bd[t_x + 1] - s->col_bd[t_x];
 }
 
-static unsigned int tile_height(const struct rpivid_dec_state *const s,
+static unsigned int tile_height(const struct hevc_d_dec_state *const s,
 				const unsigned int t_y)
 {
 	return s->row_bd[t_y + 1] - s->row_bd[t_y];
 }
 
-static void fill_rs_to_ts(struct rpivid_dec_state *const s)
+static void fill_rs_to_ts(struct hevc_d_dec_state *const s)
 {
 	unsigned int ts = 0;
 	unsigned int t_y;
@@ -1432,13 +1343,13 @@ static void fill_rs_to_ts(struct rpivid_dec_state *const s)
 	}
 }
 
-static int updated_ps(struct rpivid_dec_state *const s)
+static int updated_ps(struct hevc_d_dec_state *const s)
 {
 	unsigned int i;
 
 	free_ps_info(s);
 
-	// Inferred parameters
+	/* Inferred parameters */
 	s->log2_ctb_size = s->sps.log2_min_luma_coding_block_size_minus3 + 3 +
 			   s->sps.log2_diff_max_min_luma_coding_block_size;
 
@@ -1449,8 +1360,6 @@ static int updated_ps(struct rpivid_dec_state *const s)
 			 (1 << s->log2_ctb_size) - 1) >>
 			s->log2_ctb_size;
 	s->ctb_size = s->ctb_width * s->ctb_height;
-
-	// Inferred parameters
 
 	s->ctb_addr_rs_to_ts = kmalloc_array(s->ctb_size,
 					     sizeof(*s->ctb_addr_rs_to_ts),
@@ -1471,12 +1380,12 @@ static int updated_ps(struct rpivid_dec_state *const s)
 		s->tile_height = s->pps.num_tile_rows_minus1 + 1;
 	}
 
-	s->col_bd = kmalloc((s->tile_width + 1) * sizeof(*s->col_bd),
-			    GFP_KERNEL);
+	s->col_bd = kmalloc_array((s->tile_width + 1), sizeof(*s->col_bd),
+				  GFP_KERNEL);
 	if (!s->col_bd)
 		goto fail;
-	s->row_bd = kmalloc((s->tile_height + 1) * sizeof(*s->row_bd),
-			    GFP_KERNEL);
+	s->row_bd = kmalloc_array((s->tile_height + 1), sizeof(*s->row_bd),
+				  GFP_KERNEL);
 	if (!s->row_bd)
 		goto fail;
 
@@ -1502,9 +1411,9 @@ fail:
 	return -ENOMEM;
 }
 
-static int write_cmd_buffer(struct rpivid_dev *const dev,
-			    struct rpivid_dec_env *const de,
-			    const struct rpivid_dec_state *const s)
+static int write_cmd_buffer(struct hevc_d_dev *const dev,
+			    struct hevc_d_dec_env *const de,
+			    const struct hevc_d_dec_state *const s)
 {
 	const size_t cmd_size = ALIGN(de->cmd_len * sizeof(de->cmd_fifo[0]),
 				      dev->cache_align);
@@ -1520,18 +1429,17 @@ static int write_cmd_buffer(struct rpivid_dev *const dev,
 	return 0;
 }
 
-static void setup_colmv(struct rpivid_ctx *const ctx, struct rpivid_run *run,
-			struct rpivid_dec_state *const s)
+static void setup_colmv(struct hevc_d_ctx *const ctx, struct hevc_d_run *run,
+			struct hevc_d_dec_state *const s)
 {
 	ctx->colmv_stride = ALIGN(s->sps.pic_width_in_luma_samples, 64);
 	ctx->colmv_picsize = ctx->colmv_stride *
 		(ALIGN(s->sps.pic_height_in_luma_samples, 64) >> 4);
 }
 
-// Can be called from irq context
-static struct rpivid_dec_env *dec_env_new(struct rpivid_ctx *const ctx)
+static struct hevc_d_dec_env *dec_env_new(struct hevc_d_ctx *const ctx)
 {
-	struct rpivid_dec_env *de;
+	struct hevc_d_dec_env *de;
 	unsigned long lock_flags;
 
 	spin_lock_irqsave(&ctx->dec_lock, lock_flags);
@@ -1540,17 +1448,17 @@ static struct rpivid_dec_env *dec_env_new(struct rpivid_ctx *const ctx)
 	if (de) {
 		ctx->dec_free = de->next;
 		de->next = NULL;
-		de->state = RPIVID_DECODE_SLICE_START;
+		de->state = HEVC_D_DECODE_SLICE_START;
 	}
 
 	spin_unlock_irqrestore(&ctx->dec_lock, lock_flags);
 	return de;
 }
 
-// Can be called from irq context
-static void dec_env_delete(struct rpivid_dec_env *const de)
+/* Can be called from irq context */
+static void dec_env_delete(struct hevc_d_dec_env *const de)
 {
-	struct rpivid_ctx * const ctx = de->ctx;
+	struct hevc_d_ctx * const ctx = de->ctx;
 	unsigned long lock_flags;
 
 	if (de->cmd_size) {
@@ -1564,20 +1472,20 @@ static void dec_env_delete(struct rpivid_dec_env *const de)
 
 	spin_lock_irqsave(&ctx->dec_lock, lock_flags);
 
-	de->state = RPIVID_DECODE_END;
+	de->state = HEVC_D_DECODE_END;
 	de->next = ctx->dec_free;
 	ctx->dec_free = de;
 
 	spin_unlock_irqrestore(&ctx->dec_lock, lock_flags);
 }
 
-static void dec_env_uninit(struct rpivid_ctx *const ctx)
+static void dec_env_uninit(struct hevc_d_ctx *const ctx)
 {
 	unsigned int i;
 
 	if (ctx->dec_pool) {
-		for (i = 0; i != RPIVID_DEC_ENV_COUNT; ++i) {
-			struct rpivid_dec_env *const de = ctx->dec_pool + i;
+		for (i = 0; i != HEVC_D_DEC_ENV_COUNT; ++i) {
+			struct hevc_d_dec_env *const de = ctx->dec_pool + i;
 
 			kfree(de->cmd_fifo);
 		}
@@ -1589,29 +1497,26 @@ static void dec_env_uninit(struct rpivid_ctx *const ctx)
 	ctx->dec_free = NULL;
 }
 
-static int dec_env_init(struct rpivid_ctx *const ctx)
+static int dec_env_init(struct hevc_d_ctx *const ctx)
 {
 	unsigned int i;
 
-	ctx->dec_pool = kzalloc(sizeof(*ctx->dec_pool) * RPIVID_DEC_ENV_COUNT,
+	ctx->dec_pool = kzalloc(sizeof(*ctx->dec_pool) * HEVC_D_DEC_ENV_COUNT,
 				GFP_KERNEL);
 	if (!ctx->dec_pool)
 		return -1;
 
 	spin_lock_init(&ctx->dec_lock);
 
-	// Build free chain
 	ctx->dec_free = ctx->dec_pool;
-	for (i = 0; i != RPIVID_DEC_ENV_COUNT - 1; ++i)
+	for (i = 0; i != HEVC_D_DEC_ENV_COUNT - 1; ++i)
 		ctx->dec_pool[i].next = ctx->dec_pool + i + 1;
 
-	// Fill in other bits
-	for (i = 0; i != RPIVID_DEC_ENV_COUNT; ++i) {
-		struct rpivid_dec_env *const de = ctx->dec_pool + i;
+	for (i = 0; i != HEVC_D_DEC_ENV_COUNT; ++i) {
+		struct hevc_d_dec_env *const de = ctx->dec_pool + i;
 
 		de->ctx = ctx;
 		de->decode_order = i;
-//		de->cmd_max = 1024;
 		de->cmd_max = 8096;
 		de->cmd_fifo = kmalloc_array(de->cmd_max,
 					     sizeof(struct rpi_cmd),
@@ -1627,26 +1532,25 @@ fail:
 	return -1;
 }
 
-// Assume that we get exactly the same DPB for every slice
-// it makes no real sense otherwise
+/*
+ * Assume that we get exactly the same DPB for every slice it makes no real
+ * sense otherwise.
+ */
 #if V4L2_HEVC_DPB_ENTRIES_NUM_MAX > 16
 #error HEVC_DPB_ENTRIES > h/w slots
 #endif
 
-static u32 mk_config2(const struct rpivid_dec_state *const s)
+static u32 mk_config2(const struct hevc_d_dec_state *const s)
 {
 	const struct v4l2_ctrl_hevc_sps *const sps = &s->sps;
 	const struct v4l2_ctrl_hevc_pps *const pps = &s->pps;
 	u32 c;
-	// BitDepthY
-	c = (sps->bit_depth_luma_minus8 + 8) << 0;
-	 // BitDepthC
-	c |= (sps->bit_depth_chroma_minus8 + 8) << 4;
-	 // BitDepthY
-	if (sps->bit_depth_luma_minus8)
+
+	c = (sps->bit_depth_luma_minus8 + 8) << 0;	/* BitDepthY */
+	c |= (sps->bit_depth_chroma_minus8 + 8) << 4;	/* BitDepthC */
+	if (sps->bit_depth_luma_minus8)			/* BitDepthY */
 		c |= BIT(8);
-	// BitDepthC
-	if (sps->bit_depth_chroma_minus8)
+	if (sps->bit_depth_chroma_minus8)		/* BitDepthC */
 		c |= BIT(9);
 	c |= s->log2_ctb_size << 10;
 	if (pps->flags & V4L2_HEVC_PPS_FLAG_CONSTRAINED_INTRA_PRED)
@@ -1673,9 +1577,9 @@ static inline bool is_ref_unit_type(const unsigned int nal_unit_type)
 	return (nal_unit_type & ~0xe) != 0;
 }
 
-static void rpivid_h265_setup(struct rpivid_ctx *ctx, struct rpivid_run *run)
+void hevc_d_h265_setup(struct hevc_d_ctx *ctx, struct hevc_d_run *run)
 {
-	struct rpivid_dev *const dev = ctx->dev;
+	struct hevc_d_dev *const dev = ctx->dev;
 	const struct v4l2_ctrl_hevc_decode_params *const dec =
 						run->h265.dec;
 	/* sh0 used where slice header contents should be constant over all
@@ -1683,232 +1587,218 @@ static void rpivid_h265_setup(struct rpivid_ctx *ctx, struct rpivid_run *run)
 	 */
 	const struct v4l2_ctrl_hevc_slice_params *const sh0 =
 					run->h265.slice_params;
-	struct rpivid_q_aux *dpb_q_aux[V4L2_HEVC_DPB_ENTRIES_NUM_MAX];
-	struct rpivid_dec_state *const s = ctx->state;
+	struct hevc_d_q_aux *dpb_q_aux[V4L2_HEVC_DPB_ENTRIES_NUM_MAX];
+	struct hevc_d_dec_state *const s = ctx->state;
 	struct vb2_queue *vq;
-	struct rpivid_dec_env *de = ctx->dec0;
+	struct hevc_d_dec_env *de = ctx->dec0;
 	unsigned int prev_rs;
 	unsigned int i;
 	int rv;
 	bool slice_temporal_mvp;
-	bool frame_end;
+	unsigned int ctb_size_y;
+	bool sps_changed = false;
 
-	xtrace_in(dev, de);
-	s->sh = NULL;  // Avoid use until in the slice loop
-
-	frame_end =
-		((run->src->flags & V4L2_BUF_FLAG_M2M_HOLD_CAPTURE_BUF) == 0);
+	s->sh = NULL;  /* Avoid use until in the slice loop */
 
 	slice_temporal_mvp = (sh0->flags &
 		   V4L2_HEVC_SLICE_PARAMS_FLAG_SLICE_TEMPORAL_MVP_ENABLED);
 
-	if (de && de->state != RPIVID_DECODE_END) {
-		switch (de->state) {
-		case RPIVID_DECODE_SLICE_CONTINUE:
-			// Expected state
-			break;
-		default:
-			v4l2_err(&dev->v4l2_dev, "%s: Unexpected state: %d\n",
-				 __func__, de->state);
-			fallthrough;
-		case RPIVID_DECODE_ERROR_CONTINUE:
-			// Uncleared error - fail now
+	if (de) {
+		v4l2_warn(&dev->v4l2_dev, "Decode env set unexpectedly");
+		goto fail;
+	}
+
+	/* Frame start */
+
+	if (!is_sps_set(run->h265.sps)) {
+		v4l2_warn(&dev->v4l2_dev, "SPS never set\n");
+		goto fail;
+	}
+	/* Can't check for PPS easily as all 0's looks valid */
+
+	if (memcmp(&s->sps, run->h265.sps, sizeof(s->sps)) != 0) {
+		/* SPS changed */
+		memcpy(&s->sps, run->h265.sps, sizeof(s->sps));
+		sps_changed = true;
+	}
+	if (sps_changed ||
+	    memcmp(&s->pps, run->h265.pps, sizeof(s->pps)) != 0) {
+		/* SPS changed */
+		memcpy(&s->pps, run->h265.pps, sizeof(s->pps));
+
+		/* Recalc stuff as required */
+		rv = updated_ps(s);
+		if (rv)
+			goto fail;
+	}
+
+	de = dec_env_new(ctx);
+	if (!de) {
+		v4l2_err(&dev->v4l2_dev, "Failed to find free decode env\n");
+		goto fail;
+	}
+	ctx->dec0 = de;
+
+	ctb_size_y =
+		1U << (s->sps.log2_min_luma_coding_block_size_minus3 +
+		       3 + s->sps.log2_diff_max_min_luma_coding_block_size);
+
+	de->pic_width_in_ctbs_y =
+		(s->sps.pic_width_in_luma_samples + ctb_size_y - 1) /
+			ctb_size_y; /* 7-15 */
+	de->pic_height_in_ctbs_y =
+		(s->sps.pic_height_in_luma_samples + ctb_size_y - 1) /
+			ctb_size_y; /* 7-17 */
+	de->cmd_len = 0;
+	de->dpbno_col = ~0U;
+
+	switch (ctx->dst_fmt.pixelformat) {
+	case V4L2_PIX_FMT_NV12MT_COL128:
+	case V4L2_PIX_FMT_NV12MT_10_COL128:
+		de->luma_stride = ctx->dst_fmt.height * 128;
+		de->frame_luma_addr =
+			vb2_dma_contig_plane_dma_addr(&run->dst->vb2_buf, 0);
+		de->chroma_stride = de->luma_stride / 2;
+		de->frame_chroma_addr =
+			vb2_dma_contig_plane_dma_addr(&run->dst->vb2_buf, 1);
+		break;
+	case V4L2_PIX_FMT_NV12_COL128:
+	case V4L2_PIX_FMT_NV12_10_COL128:
+		de->luma_stride = ctx->dst_fmt.plane_fmt[0].bytesperline * 128;
+		de->frame_luma_addr =
+			vb2_dma_contig_plane_dma_addr(&run->dst->vb2_buf, 0);
+		de->chroma_stride = de->luma_stride;
+		de->frame_chroma_addr = de->frame_luma_addr +
+					(ctx->dst_fmt.height * 128);
+		break;
+	}
+
+	de->frame_aux = NULL;
+
+	if (s->sps.bit_depth_luma_minus8 !=
+	    s->sps.bit_depth_chroma_minus8) {
+		v4l2_warn(&dev->v4l2_dev,
+			  "Chroma depth (%d) != Luma depth (%d)\n",
+			  s->sps.bit_depth_chroma_minus8 + 8,
+			  s->sps.bit_depth_luma_minus8 + 8);
+		goto fail;
+	}
+	if (s->sps.bit_depth_luma_minus8 == 0) {
+		if (ctx->dst_fmt.pixelformat != V4L2_PIX_FMT_NV12MT_COL128 &&
+		    ctx->dst_fmt.pixelformat != V4L2_PIX_FMT_NV12_COL128) {
+			v4l2_err(&dev->v4l2_dev,
+				 "Pixel format %#x != NV12MT_COL128 for 8-bit output",
+				 ctx->dst_fmt.pixelformat);
 			goto fail;
 		}
-
-		if (s->slice_temporal_mvp != slice_temporal_mvp) {
-			v4l2_warn(&dev->v4l2_dev,
-				  "Slice Temporal MVP non-constant\n");
+	} else if (s->sps.bit_depth_luma_minus8 == 2) {
+		if (ctx->dst_fmt.pixelformat != V4L2_PIX_FMT_NV12MT_10_COL128 &&
+		    ctx->dst_fmt.pixelformat != V4L2_PIX_FMT_NV12_10_COL128) {
+			v4l2_err(&dev->v4l2_dev,
+				 "Pixel format %#x != NV12MT_10_COL128 for 10-bit output",
+				 ctx->dst_fmt.pixelformat);
 			goto fail;
 		}
 	} else {
-		/* Frame start */
-		unsigned int ctb_size_y;
-		bool sps_changed = false;
-
-		if (!is_sps_set(run->h265.sps)) {
-			v4l2_warn(&dev->v4l2_dev, "SPS never set\n");
+		v4l2_warn(&dev->v4l2_dev, "Luma depth (%d) unsupported\n",
+			  s->sps.bit_depth_luma_minus8 + 8);
+		goto fail;
+	}
+	switch (ctx->dst_fmt.pixelformat) {
+	case V4L2_PIX_FMT_NV12MT_COL128:
+	case V4L2_PIX_FMT_NV12MT_10_COL128:
+		if (run->dst->vb2_buf.num_planes != 2) {
+			v4l2_warn(&dev->v4l2_dev, "Capture planes (%d) != 2\n",
+				  run->dst->vb2_buf.num_planes);
 			goto fail;
 		}
-		// Can't check for PPS easily as all 0's looks valid to me
-
-		if (memcmp(&s->sps, run->h265.sps, sizeof(s->sps)) != 0) {
-			/* SPS changed */
-			v4l2_info(&dev->v4l2_dev, "SPS changed\n");
-			memcpy(&s->sps, run->h265.sps, sizeof(s->sps));
-			sps_changed = true;
-		}
-		if (sps_changed ||
-		    memcmp(&s->pps, run->h265.pps, sizeof(s->pps)) != 0) {
-			/* SPS changed */
-			v4l2_info(&dev->v4l2_dev, "PPS changed\n");
-			memcpy(&s->pps, run->h265.pps, sizeof(s->pps));
-
-			/* Recalc stuff as required */
-			rv = updated_ps(s);
-			if (rv)
-				goto fail;
-		}
-
-		de = dec_env_new(ctx);
-		if (!de) {
-			v4l2_err(&dev->v4l2_dev,
-				 "Failed to find free decode env\n");
-			goto fail;
-		}
-		ctx->dec0 = de;
-
-		ctb_size_y =
-			1U << (s->sps.log2_min_luma_coding_block_size_minus3 +
-			       3 +
-			       s->sps.log2_diff_max_min_luma_coding_block_size);
-
-		de->pic_width_in_ctbs_y =
-			(s->sps.pic_width_in_luma_samples + ctb_size_y - 1) /
-				ctb_size_y; // 7-15
-		de->pic_height_in_ctbs_y =
-			(s->sps.pic_height_in_luma_samples + ctb_size_y - 1) /
-				ctb_size_y; // 7-17
-		de->cmd_len = 0;
-		de->dpbno_col = ~0U;
-
-		de->bit_copy_gptr = ctx->bitbufs + ctx->p1idx;
-		de->bit_copy_len = 0;
-
-		de->frame_c_offset = ctx->dst_fmt.height * 128;
-		de->frame_stride = ctx->dst_fmt.plane_fmt[0].bytesperline * 128;
-		de->frame_addr =
-			vb2_dma_contig_plane_dma_addr(&run->dst->vb2_buf, 0);
-		de->frame_aux = NULL;
-
-		if (s->sps.bit_depth_luma_minus8 !=
-		    s->sps.bit_depth_chroma_minus8) {
+		if (run->dst->planes[0].length < ctx->dst_fmt.plane_fmt[0].sizeimage ||
+		    run->dst->planes[1].length < ctx->dst_fmt.plane_fmt[1].sizeimage) {
 			v4l2_warn(&dev->v4l2_dev,
-				  "Chroma depth (%d) != Luma depth (%d)\n",
-				  s->sps.bit_depth_chroma_minus8 + 8,
-				  s->sps.bit_depth_luma_minus8 + 8);
+				  "Capture planes length (%d/%d) < sizeimage (%d/%d)\n",
+				  run->dst->planes[0].length,
+				  run->dst->planes[1].length,
+				  ctx->dst_fmt.plane_fmt[0].sizeimage,
+				  ctx->dst_fmt.plane_fmt[1].sizeimage);
 			goto fail;
 		}
-		if (s->sps.bit_depth_luma_minus8 == 0) {
-			if (ctx->dst_fmt.pixelformat !=
-						V4L2_PIX_FMT_NV12_COL128) {
-				v4l2_err(&dev->v4l2_dev,
-					 "Pixel format %#x != NV12_COL128 for 8-bit output",
-					 ctx->dst_fmt.pixelformat);
-				goto fail;
-			}
-		} else if (s->sps.bit_depth_luma_minus8 == 2) {
-			if (ctx->dst_fmt.pixelformat !=
-						V4L2_PIX_FMT_NV12_10_COL128) {
-				v4l2_err(&dev->v4l2_dev,
-					 "Pixel format %#x != NV12_10_COL128 for 10-bit output",
-					 ctx->dst_fmt.pixelformat);
-				goto fail;
-			}
-		} else {
-			v4l2_warn(&dev->v4l2_dev,
-				  "Luma depth (%d) unsupported\n",
-				  s->sps.bit_depth_luma_minus8 + 8);
-			goto fail;
-		}
+		break;
+	case V4L2_PIX_FMT_NV12_COL128:
+	case V4L2_PIX_FMT_NV12_10_COL128:
 		if (run->dst->vb2_buf.num_planes != 1) {
 			v4l2_warn(&dev->v4l2_dev, "Capture planes (%d) != 1\n",
 				  run->dst->vb2_buf.num_planes);
 			goto fail;
 		}
-		if (run->dst->planes[0].length <
-		    ctx->dst_fmt.plane_fmt[0].sizeimage) {
+		if (run->dst->planes[0].length < ctx->dst_fmt.plane_fmt[0].sizeimage) {
 			v4l2_warn(&dev->v4l2_dev,
-				  "Capture plane[0] length (%d) < sizeimage (%d)\n",
+				  "Capture planes length (%d) < sizeimage (%d)\n",
 				  run->dst->planes[0].length,
 				  ctx->dst_fmt.plane_fmt[0].sizeimage);
 			goto fail;
 		}
-
-		// Fill in ref planes with our address s.t. if we mess
-		// up refs somehow then we still have a valid address
-		// entry
-		for (i = 0; i != 16; ++i)
-			de->ref_addrs[i] = de->frame_addr;
-
-		/*
-		 * Stash initial temporal_mvp flag
-		 * This must be the same for all pic slices (7.4.7.1)
-		 */
-		s->slice_temporal_mvp = slice_temporal_mvp;
-
-		/*
-		 * Need Aux ents for all (ref) DPB ents if temporal MV could
-		 * be enabled for any pic
-		 */
-		s->use_aux = ((s->sps.flags &
-			       V4L2_HEVC_SPS_FLAG_SPS_TEMPORAL_MVP_ENABLED) != 0);
-		s->mk_aux = s->use_aux &&
-			    (s->sps.sps_max_sub_layers_minus1 >= sh0->nuh_temporal_id_plus1 ||
-			     is_ref_unit_type(sh0->nal_unit_type));
-
-		// Phase 2 reg pre-calc
-		de->rpi_config2 = mk_config2(s);
-		de->rpi_framesize = (s->sps.pic_height_in_luma_samples << 16) |
-				    s->sps.pic_width_in_luma_samples;
-		de->rpi_currpoc = sh0->slice_pic_order_cnt;
-
-		if (s->sps.flags &
-		    V4L2_HEVC_SPS_FLAG_SPS_TEMPORAL_MVP_ENABLED) {
-			setup_colmv(ctx, run, s);
-		}
-
-		s->slice_idx = 0;
-
-		if (sh0->slice_segment_addr != 0) {
-			v4l2_warn(&dev->v4l2_dev,
-				  "New frame but segment_addr=%d\n",
-				  sh0->slice_segment_addr);
-			goto fail;
-		}
-
-		/* Allocate a bitbuf if we need one - don't need one if single
-		 * slice as we can use the src buf directly
-		 */
-		if (!frame_end && !de->bit_copy_gptr->ptr) {
-			size_t bits_alloc;
-			bits_alloc = rpivid_bit_buf_size(s->sps.pic_width_in_luma_samples,
-							 s->sps.pic_height_in_luma_samples,
-							 s->sps.bit_depth_luma_minus8);
-
-			if (gptr_alloc(dev, de->bit_copy_gptr,
-				       bits_alloc,
-				       DMA_ATTR_FORCE_CONTIGUOUS) != 0) {
-				v4l2_err(&dev->v4l2_dev,
-					 "Unable to alloc buf (%zu) for bit copy\n",
-					 bits_alloc);
-				goto fail;
-			}
-			v4l2_info(&dev->v4l2_dev,
-				  "Alloc buf (%zu) for bit copy OK\n",
-				  bits_alloc);
-		}
+		break;
 	}
 
-	// Either map src buffer or use directly
-	s->src_addr = 0;
-	s->src_buf = NULL;
+	/*
+	 * Fill in ref planes with our address s.t. if we mess up refs
+	 * somehow then we still have a valid address entry
+	 */
+	for (i = 0; i != 16; ++i) {
+		de->ref_addrs[i][0] = de->frame_luma_addr;
+		de->ref_addrs[i][1] = de->frame_chroma_addr;
+	}
 
-	if (frame_end)
-		s->src_addr = vb2_dma_contig_plane_dma_addr(&run->src->vb2_buf,
-							    0);
-	if (!s->src_addr)
-		s->src_buf = vb2_plane_vaddr(&run->src->vb2_buf, 0);
-	if (!s->src_addr && !s->src_buf) {
+	/*
+	 * Stash initial temporal_mvp flag
+	 * This must be the same for all pic slices (7.4.7.1)
+	 */
+	s->slice_temporal_mvp = slice_temporal_mvp;
+
+	/*
+	 * Need Aux ents for all (ref) DPB ents if temporal MV could
+	 * be enabled for any pic
+	 */
+	s->use_aux = ((s->sps.flags &
+		       V4L2_HEVC_SPS_FLAG_SPS_TEMPORAL_MVP_ENABLED) != 0);
+	s->mk_aux = s->use_aux &&
+		    (s->sps.sps_max_sub_layers_minus1 >= sh0->nuh_temporal_id_plus1 ||
+		     is_ref_unit_type(sh0->nal_unit_type));
+
+	/* Phase 2 reg pre-calc */
+	de->rpi_config2 = mk_config2(s);
+	de->rpi_framesize = (s->sps.pic_height_in_luma_samples << 16) |
+			    s->sps.pic_width_in_luma_samples;
+	de->rpi_currpoc = sh0->slice_pic_order_cnt;
+
+	if (s->sps.flags &
+	    V4L2_HEVC_SPS_FLAG_SPS_TEMPORAL_MVP_ENABLED) {
+		setup_colmv(ctx, run, s);
+	}
+
+	s->slice_idx = 0;
+
+	if (sh0->slice_segment_addr != 0) {
+		v4l2_warn(&dev->v4l2_dev,
+			  "New frame but segment_addr=%d\n",
+			  sh0->slice_segment_addr);
+		goto fail;
+	}
+
+	/* Either map src buffer or use directly */
+	s->src_addr = 0;
+
+	s->src_addr = vb2_dma_contig_plane_dma_addr(&run->src->vb2_buf, 0);
+	if (!s->src_addr) {
 		v4l2_err(&dev->v4l2_dev, "Failed to map src buffer\n");
 		goto fail;
 	}
 
-	// Pre calc a few things
+	/* Pre calc parameters */
 	s->dec = dec;
 	for (i = 0; i != run->h265.slice_ents; ++i) {
 		const struct v4l2_ctrl_hevc_slice_params *const sh = sh0 + i;
-		const bool last_slice = frame_end && i + 1 == run->h265.slice_ents;
+		const bool last_slice = i + 1 == run->h265.slice_ents;
 
 		s->sh = sh;
 
@@ -1962,19 +1852,16 @@ static void rpivid_h265_setup(struct rpivid_ctx *ctx, struct rpivid_run *run)
 		++s->slice_idx;
 	}
 
-	if (!frame_end) {
-		xtrace_ok(dev, de);
-		return;
-	}
-
-	// Frame end
+	/* Frame end */
 	memset(dpb_q_aux, 0,
 	       sizeof(*dpb_q_aux) * V4L2_HEVC_DPB_ENTRIES_NUM_MAX);
 
-	// Locate ref frames
-	// At least in the current implementation this is constant across all
-	// slices. If this changes we will need idx mapping code.
-	// Uses sh so here rather than trigger
+	/*
+	 * Locate ref frames
+	 * At least in the current implementation this is constant across all
+	 * slices. If this changes we will need idx mapping code.
+	 * Uses sh so here rather than trigger
+	 */
 
 	vq = v4l2_m2m_get_vq(ctx->fh.m2m_ctx,
 			     V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
@@ -1984,12 +1871,12 @@ static void rpivid_h265_setup(struct rpivid_ctx *ctx, struct rpivid_run *run)
 		goto fail;
 	}
 
-	//        v4l2_info(&dev->v4l2_dev, "rpivid_h265_end of frame\n");
 	if (write_cmd_buffer(dev, de, s))
 		goto fail;
 
 	for (i = 0; i < dec->num_active_dpb_entries; ++i) {
 		struct vb2_buffer *buf = vb2_find_buffer(vq, dec->dpb[i].timestamp);
+
 		if (!buf) {
 			v4l2_warn(&dev->v4l2_dev,
 				  "Missing DPB ent %d, timestamp=%lld\n",
@@ -1999,6 +1886,7 @@ static void rpivid_h265_setup(struct rpivid_ctx *ctx, struct rpivid_run *run)
 
 		if (s->use_aux) {
 			int buffer_index = buf->index;
+
 			dpb_q_aux[i] = aux_q_ref_idx(ctx, buffer_index);
 			if (!dpb_q_aux[i])
 				v4l2_warn(&dev->v4l2_dev,
@@ -2007,17 +1895,24 @@ static void rpivid_h265_setup(struct rpivid_ctx *ctx, struct rpivid_run *run)
 					  buffer_index);
 		}
 
-		de->ref_addrs[i] =
+		de->ref_addrs[i][0] =
 			vb2_dma_contig_plane_dma_addr(buf, 0);
+		if (ctx->dst_fmt.pixelformat == V4L2_PIX_FMT_NV12MT_COL128 ||
+		    ctx->dst_fmt.pixelformat == V4L2_PIX_FMT_NV12MT_10_COL128)
+			de->ref_addrs[i][1] =
+				vb2_dma_contig_plane_dma_addr(buf, 1);
+		else
+			de->ref_addrs[i][1] = de->ref_addrs[i][0] +
+				(ctx->dst_fmt.height * 128);
 	}
 
-	// Move DPB from temp
+	/* Move DPB from temp */
 	for (i = 0; i != V4L2_HEVC_DPB_ENTRIES_NUM_MAX; ++i) {
 		aux_q_release(ctx, &s->ref_aux[i]);
 		s->ref_aux[i] = dpb_q_aux[i];
 	}
-	// Unref the old frame aux too - it is either in the DPB or not
-	// now
+
+	/* Unref the old frame aux too - it is either in the DPB or not now */
 	aux_q_release(ctx, &s->frame_aux);
 
 	if (s->mk_aux) {
@@ -2039,61 +1934,60 @@ static void rpivid_h265_setup(struct rpivid_ctx *ctx, struct rpivid_run *run)
 				 de->dpbno_col,
 				 dec->num_active_dpb_entries);
 		} else {
-			// Standard requires that the col pic is
-			// constant for the duration of the pic
-			// (text of collocated_ref_idx in H265-2 2018
-			// 7.4.7.1)
+			/* Standard requires that the col pic is constant for
+			 * the duration of the pic (text of collocated_ref_idx
+			 * in H265-2 2018 7.4.7.1)
+			 */
 
-			// Spot the collocated ref in passing
+			/* Spot the collocated ref in passing */
 			de->col_aux = aux_q_ref(ctx,
 						dpb_q_aux[de->dpbno_col]);
 
 			if (!de->col_aux) {
 				v4l2_warn(&dev->v4l2_dev,
 					  "Missing DPB ent for col\n");
-				// Probably need to abort if this fails
-				// as P2 may explode on bad data
+				/* Need to abort if this fails as P2 may
+				 * explode on bad data
+				 */
 				goto fail;
 			}
 		}
 	}
 
-	de->state = RPIVID_DECODE_PHASE1;
-	xtrace_ok(dev, de);
+	de->state = HEVC_D_DECODE_PHASE1;
 	return;
 
 fail:
 	if (de)
 		// Actual error reporting happens in Trigger
-		de->state = frame_end ? RPIVID_DECODE_ERROR_DONE :
-					RPIVID_DECODE_ERROR_CONTINUE;
-	xtrace_fail(dev, de);
+		de->state = HEVC_D_DECODE_ERROR_DONE;
 }
 
-//////////////////////////////////////////////////////////////////////////////
-// Handle PU and COEFF stream overflow
-
-// Returns:
-// -1  Phase 1 decode error
-//  0  OK
-// >0  Out of space (bitmask)
+/* Handle PU and COEFF stream overflow
+ *
+ * Returns:
+ * -1  Phase 1 decode error
+ *  0  OK
+ * >0  Out of space (bitmask)
+ */
 
 #define STATUS_COEFF_EXHAUSTED	8
 #define STATUS_PU_EXHAUSTED	16
 
-static int check_status(const struct rpivid_dev *const dev)
+static int check_status(const struct hevc_d_dev *const dev)
 {
 	const u32 cfstatus = apb_read(dev, RPI_CFSTATUS);
 	const u32 cfnum = apb_read(dev, RPI_CFNUM);
 	u32 status = apb_read(dev, RPI_STATUS);
 
-	// Handle PU and COEFF stream overflow
-
-	// this is the definition of successful completion of phase 1
-	// it assures that status register is zero and all blocks in each tile
-	// have completed
+	/*
+	 * Handle PU and COEFF stream overflow
+	 * This is the definition of successful completion of phase 1.
+	 * It assures that status register is zero and all blocks in each tile
+	 * have completed
+	 */
 	if (cfstatus == cfnum)
-		return 0;	//No error
+		return 0;
 
 	status &= (STATUS_PU_EXHAUSTED | STATUS_COEFF_EXHAUSTED);
 	if (status)
@@ -2102,97 +1996,72 @@ static int check_status(const struct rpivid_dev *const dev)
 	return -1;
 }
 
-static void phase2_cb(struct rpivid_dev *const dev, void *v)
+static void phase2_cb(struct hevc_d_dev *const dev, void *v)
 {
-	struct rpivid_dec_env *const de = v;
-
-	xtrace_in(dev, de);
+	struct hevc_d_dec_env *const de = v;
 
 	/* Done with buffers - allow new P1 */
-	rpivid_hw_irq_active1_enable_claim(dev, 1);
+	hevc_d_hw_irq_active1_enable_claim(dev, 1);
 
 	v4l2_m2m_buf_done(de->frame_buf, VB2_BUF_STATE_DONE);
 	de->frame_buf = NULL;
 
-#if USE_REQUEST_PIN
-	media_request_unpin(de->req_pin);
+	media_request_manual_complete(de->req_pin);
 	de->req_pin = NULL;
-#else
-	media_request_object_complete(de->req_obj);
-	de->req_obj = NULL;
-#endif
 
-	xtrace_ok(dev, de);
 	dec_env_delete(de);
 }
 
-static void phase2_claimed(struct rpivid_dev *const dev, void *v)
+static void phase2_claimed(struct hevc_d_dev *const dev, void *v)
 {
-	struct rpivid_dec_env *const de = v;
+	struct hevc_d_dec_env *const de = v;
 	unsigned int i;
-
-	xtrace_in(dev, de);
 
 	apb_write_vc_addr(dev, RPI_PURBASE, de->pu_base_vc);
 	apb_write_vc_len(dev, RPI_PURSTRIDE, de->pu_stride);
 	apb_write_vc_addr(dev, RPI_COEFFRBASE, de->coeff_base_vc);
 	apb_write_vc_len(dev, RPI_COEFFRSTRIDE, de->coeff_stride);
 
-	apb_write_vc_addr(dev, RPI_OUTYBASE, de->frame_addr);
-	apb_write_vc_addr(dev, RPI_OUTCBASE,
-			  de->frame_addr + de->frame_c_offset);
-	apb_write_vc_len(dev, RPI_OUTYSTRIDE, de->frame_stride);
-	apb_write_vc_len(dev, RPI_OUTCSTRIDE, de->frame_stride);
-
-	//    v4l2_info(&dev->v4l2_dev, "Frame: Y=%llx, C=%llx, Stride=%x\n",
-	//              de->frame_addr, de->frame_addr + de->frame_c_offset,
-	//              de->frame_stride);
+	apb_write_vc_addr(dev, RPI_OUTYBASE, de->frame_luma_addr);
+	apb_write_vc_addr(dev, RPI_OUTCBASE, de->frame_chroma_addr);
+	apb_write_vc_len(dev, RPI_OUTYSTRIDE, de->luma_stride);
+	apb_write_vc_len(dev, RPI_OUTCSTRIDE, de->chroma_stride);
 
 	for (i = 0; i < 16; i++) {
 		// Strides are in fact unused but fill in anyway
-		apb_write_vc_addr(dev, 0x9000 + 16 * i, de->ref_addrs[i]);
-		apb_write_vc_len(dev, 0x9004 + 16 * i, de->frame_stride);
-		apb_write_vc_addr(dev, 0x9008 + 16 * i,
-				  de->ref_addrs[i] + de->frame_c_offset);
-		apb_write_vc_len(dev, 0x900C + 16 * i, de->frame_stride);
+		apb_write_vc_addr(dev, 0x9000 + 16 * i, de->ref_addrs[i][0]);
+		apb_write_vc_len(dev, 0x9004 + 16 * i, de->luma_stride);
+		apb_write_vc_addr(dev, 0x9008 + 16 * i, de->ref_addrs[i][1]);
+		apb_write_vc_len(dev, 0x900C + 16 * i, de->chroma_stride);
 	}
 
 	apb_write(dev, RPI_CONFIG2, de->rpi_config2);
 	apb_write(dev, RPI_FRAMESIZE, de->rpi_framesize);
 	apb_write(dev, RPI_CURRPOC, de->rpi_currpoc);
-	//    v4l2_info(&dev->v4l2_dev, "Config2=%#x, FrameSize=%#x, POC=%#x\n",
-	//    de->rpi_config2, de->rpi_framesize, de->rpi_currpoc);
 
-	// collocated reads/writes
+	/* collocated reads/writes */
 	apb_write_vc_len(dev, RPI_COLSTRIDE,
-			 de->ctx->colmv_stride); // Read vals
+			 de->ctx->colmv_stride);
 	apb_write_vc_len(dev, RPI_MVSTRIDE,
-			 de->ctx->colmv_stride); // Write vals
+			 de->ctx->colmv_stride);
 	apb_write_vc_addr(dev, RPI_MVBASE,
 			  !de->frame_aux ? 0 : de->frame_aux->col.addr);
 	apb_write_vc_addr(dev, RPI_COLBASE,
 			  !de->col_aux ? 0 : de->col_aux->col.addr);
 
-	//v4l2_info(&dev->v4l2_dev,
-	//	   "Mv=%llx, Col=%llx, Stride=%x, Buf=%llx->%llx\n",
-	//	   de->rpi_mvbase, de->rpi_colbase, de->ctx->colmv_stride,
-	//	   de->ctx->colmvbuf.addr, de->ctx->colmvbuf.addr +
-	//	   de->ctx->colmvbuf.size);
-
-	rpivid_hw_irq_active2_irq(dev, &de->irq_ent, phase2_cb, de);
+	hevc_d_hw_irq_active2_irq(dev, &de->irq_ent, phase2_cb, de);
 
 	apb_write_final(dev, RPI_NUMROWS, de->pic_height_in_ctbs_y);
-
-	xtrace_ok(dev, de);
 }
 
-static void phase1_claimed(struct rpivid_dev *const dev, void *v);
+static void phase1_claimed(struct hevc_d_dev *const dev, void *v);
 
-// release any and all objects associated with de
-// and reenable phase 1 if required
-static void phase1_err_fin(struct rpivid_dev *const dev,
-			   struct rpivid_ctx *const ctx,
-			   struct rpivid_dec_env *const de)
+/* release any and all objects associated with de and reenable phase 1 if
+ * required
+ *///  1 if required
+static void phase1_err_fin(struct hevc_d_dev *const dev,
+			   struct hevc_d_ctx *const ctx,
+			   struct hevc_d_dec_env *const de)
 {
 	/* Return all detached buffers */
 	if (de->src_buf)
@@ -2201,35 +2070,28 @@ static void phase1_err_fin(struct rpivid_dev *const dev,
 	if (de->frame_buf)
 		v4l2_m2m_buf_done(de->frame_buf, VB2_BUF_STATE_ERROR);
 	de->frame_buf = NULL;
-#if USE_REQUEST_PIN
+
 	if (de->req_pin)
-		media_request_unpin(de->req_pin);
+		media_request_manual_complete(de->req_pin);
 	de->req_pin = NULL;
-#else
-	if (de->req_obj)
-		media_request_object_complete(de->req_obj);
-	de->req_obj = NULL;
-#endif
 
 	dec_env_delete(de);
 
 	/* Reenable phase 0 if we were blocking */
-	if (atomic_add_return(-1, &ctx->p1out) >= RPIVID_P1BUF_COUNT - 1)
+	if (atomic_add_return(-1, &ctx->p1out) >= HEVC_D_P1BUF_COUNT - 1)
 		v4l2_m2m_job_finish(dev->m2m_dev, ctx->fh.m2m_ctx);
 
 	/* Done with P1-P2 buffers - allow new P1 */
-	rpivid_hw_irq_active1_enable_claim(dev, 1);
+	hevc_d_hw_irq_active1_enable_claim(dev, 1);
 }
 
-static void phase1_thread(struct rpivid_dev *const dev, void *v)
+static void phase1_thread(struct hevc_d_dev *const dev, void *v)
 {
-	struct rpivid_dec_env *const de = v;
-	struct rpivid_ctx *const ctx = de->ctx;
+	struct hevc_d_dec_env *const de = v;
+	struct hevc_d_ctx *const ctx = de->ctx;
 
-	struct rpivid_gptr *const pu_gptr = ctx->pu_bufs + ctx->p2idx;
-	struct rpivid_gptr *const coeff_gptr = ctx->coeff_bufs + ctx->p2idx;
-
-	xtrace_in(dev, de);
+	struct hevc_d_gptr *const pu_gptr = ctx->pu_bufs + ctx->p2idx;
+	struct hevc_d_gptr *const coeff_gptr = ctx->coeff_bufs + ctx->p2idx;
 
 	if (de->p1_status & STATUS_PU_EXHAUSTED) {
 		if (gptr_realloc_new(dev, pu_gptr, next_size(pu_gptr->size))) {
@@ -2255,7 +2117,6 @@ static void phase1_thread(struct rpivid_dev *const dev, void *v)
 	}
 
 	phase1_claimed(dev, de);
-	xtrace_ok(dev, de);
 	return;
 
 fail:
@@ -2265,17 +2126,14 @@ fail:
 			 __func__);
 		ctx->fatal_err = 1;
 	}
-	xtrace_fail(dev, de);
 	phase1_err_fin(dev, ctx, de);
 }
 
 /* Always called in irq context (this is good) */
-static void phase1_cb(struct rpivid_dev *const dev, void *v)
+static void phase1_cb(struct hevc_d_dev *const dev, void *v)
 {
-	struct rpivid_dec_env *const de = v;
-	struct rpivid_ctx *const ctx = de->ctx;
-
-	xtrace_in(dev, de);
+	struct hevc_d_dec_env *const de = v;
+	struct hevc_d_ctx *const ctx = de->ctx;
 
 	de->p1_status = check_status(dev);
 
@@ -2287,7 +2145,7 @@ static void phase1_cb(struct rpivid_dev *const dev, void *v)
 			goto fail;
 
 		/* Need to realloc - push onto a thread rather than IRQ */
-		rpivid_hw_irq_active1_thread(dev, &de->irq_ent,
+		hevc_d_hw_irq_active1_thread(dev, &de->irq_ent,
 					     phase1_thread, de);
 		return;
 	}
@@ -2297,34 +2155,28 @@ static void phase1_cb(struct rpivid_dev *const dev, void *v)
 
 	/* All phase1 error paths done - it is safe to inc p2idx */
 	ctx->p2idx =
-		(ctx->p2idx + 1 >= RPIVID_P2BUF_COUNT) ? 0 : ctx->p2idx + 1;
+		(ctx->p2idx + 1 >= HEVC_D_P2BUF_COUNT) ? 0 : ctx->p2idx + 1;
 
 	/* Renable the next setup if we were blocking */
-	if (atomic_add_return(-1, &ctx->p1out) >= RPIVID_P1BUF_COUNT - 1) {
-		xtrace_fin(dev, de);
+	if (atomic_add_return(-1, &ctx->p1out) >= HEVC_D_P1BUF_COUNT - 1)
 		v4l2_m2m_job_finish(dev->m2m_dev, ctx->fh.m2m_ctx);
-	}
 
-	rpivid_hw_irq_active2_claim(dev, &de->irq_ent, phase2_claimed, de);
+	hevc_d_hw_irq_active2_claim(dev, &de->irq_ent, phase2_claimed, de);
 
-	xtrace_ok(dev, de);
 	return;
 
 fail:
-	xtrace_fail(dev, de);
 	phase1_err_fin(dev, ctx, de);
 }
 
-static void phase1_claimed(struct rpivid_dev *const dev, void *v)
+static void phase1_claimed(struct hevc_d_dev *const dev, void *v)
 {
-	struct rpivid_dec_env *const de = v;
-	struct rpivid_ctx *const ctx = de->ctx;
+	struct hevc_d_dec_env *const de = v;
+	struct hevc_d_ctx *const ctx = de->ctx;
 
-	const struct rpivid_gptr * const pu_gptr = ctx->pu_bufs + ctx->p2idx;
-	const struct rpivid_gptr * const coeff_gptr = ctx->coeff_bufs +
+	const struct hevc_d_gptr * const pu_gptr = ctx->pu_bufs + ctx->p2idx;
+	const struct hevc_d_gptr * const coeff_gptr = ctx->coeff_bufs +
 						      ctx->p2idx;
-
-	xtrace_in(dev, de);
 
 	if (ctx->fatal_err)
 		goto fail;
@@ -2346,27 +2198,25 @@ static void phase1_claimed(struct rpivid_dev *const dev, void *v)
 	apb_write_vc_addr(dev, RPI_COEFFWBASE, de->coeff_base_vc);
 	apb_write_vc_len(dev, RPI_COEFFWSTRIDE, de->coeff_stride);
 
-	// Trigger command FIFO
+	/* Trigger command FIFO */
 	apb_write(dev, RPI_CFNUM, de->cmd_len);
 
-	// Claim irq
-	rpivid_hw_irq_active1_irq(dev, &de->irq_ent, phase1_cb, de);
+	/* Claim irq */
+	hevc_d_hw_irq_active1_irq(dev, &de->irq_ent, phase1_cb, de);
 
-	// And start the h/w
+	/* Start the h/w */
 	apb_write_vc_addr_final(dev, RPI_CFBASE, de->cmd_addr);
 
-	xtrace_ok(dev, de);
 	return;
 
 fail:
-	xtrace_fail(dev, de);
 	phase1_err_fin(dev, ctx, de);
 }
 
-static void dec_state_delete(struct rpivid_ctx *const ctx)
+static void dec_state_delete(struct hevc_d_ctx *const ctx)
 {
 	unsigned int i;
-	struct rpivid_dec_state *const s = ctx->state;
+	struct hevc_d_dec_state *const s = ctx->state;
 
 	if (!s)
 		return;
@@ -2384,10 +2234,10 @@ static void dec_state_delete(struct rpivid_ctx *const ctx)
 struct irq_sync {
 	atomic_t done;
 	wait_queue_head_t wq;
-	struct rpivid_hw_irq_ent irq_ent;
+	struct hevc_d_hw_irq_ent irq_ent;
 };
 
-static void phase2_sync_claimed(struct rpivid_dev *const dev, void *v)
+static void phase2_sync_claimed(struct hevc_d_dev *const dev, void *v)
 {
 	struct irq_sync *const sync = v;
 
@@ -2395,12 +2245,12 @@ static void phase2_sync_claimed(struct rpivid_dev *const dev, void *v)
 	wake_up(&sync->wq);
 }
 
-static void phase1_sync_claimed(struct rpivid_dev *const dev, void *v)
+static void phase1_sync_claimed(struct hevc_d_dev *const dev, void *v)
 {
 	struct irq_sync *const sync = v;
 
-	rpivid_hw_irq_active1_enable_claim(dev, 1);
-	rpivid_hw_irq_active2_claim(dev, &sync->irq_ent, phase2_sync_claimed, sync);
+	hevc_d_hw_irq_active1_enable_claim(dev, 1);
+	hevc_d_hw_irq_active2_claim(dev, &sync->irq_ent, phase2_sync_claimed, sync);
 }
 
 /* Sync with IRQ operations
@@ -2411,49 +2261,47 @@ static void phase1_sync_claimed(struct rpivid_dev *const dev, void *v)
  * phase1 has counted enables so must reenable once claimed
  * phase2 has unlimited enables
  */
-static void irq_sync(struct rpivid_dev *const dev)
+static void irq_sync(struct hevc_d_dev *const dev)
 {
 	struct irq_sync sync;
 
 	atomic_set(&sync.done, 0);
 	init_waitqueue_head(&sync.wq);
 
-	rpivid_hw_irq_active1_claim(dev, &sync.irq_ent, phase1_sync_claimed, &sync);
+	hevc_d_hw_irq_active1_claim(dev, &sync.irq_ent, phase1_sync_claimed, &sync);
 	wait_event(sync.wq, atomic_read(&sync.done));
 }
 
-static void h265_ctx_uninit(struct rpivid_dev *const dev, struct rpivid_ctx *ctx)
+static void h265_ctx_uninit(struct hevc_d_dev *const dev, struct hevc_d_ctx *ctx)
 {
 	unsigned int i;
 
 	dec_env_uninit(ctx);
 	dec_state_delete(ctx);
 
-	// dec_env & state must be killed before this to release the buffer to
-	// the free pool
+	/*
+	 * dec_env & state must be killed before this to release the buffer to
+	 * the free pool
+	 */
 	aux_q_uninit(ctx);
 
-	for (i = 0; i != ARRAY_SIZE(ctx->bitbufs); ++i)
-		gptr_free(dev, ctx->bitbufs + i);
 	for (i = 0; i != ARRAY_SIZE(ctx->pu_bufs); ++i)
 		gptr_free(dev, ctx->pu_bufs + i);
 	for (i = 0; i != ARRAY_SIZE(ctx->coeff_bufs); ++i)
 		gptr_free(dev, ctx->coeff_bufs + i);
 }
 
-static void rpivid_h265_stop(struct rpivid_ctx *ctx)
+void hevc_d_h265_stop(struct hevc_d_ctx *ctx)
 {
-	struct rpivid_dev *const dev = ctx->dev;
-
-	v4l2_info(&dev->v4l2_dev, "%s\n", __func__);
+	struct hevc_d_dev *const dev = ctx->dev;
 
 	irq_sync(dev);
 	h265_ctx_uninit(dev, ctx);
 }
 
-static int rpivid_h265_start(struct rpivid_ctx *ctx)
+int hevc_d_h265_start(struct hevc_d_ctx *ctx)
 {
-	struct rpivid_dev *const dev = ctx->dev;
+	struct hevc_d_dev *const dev = ctx->dev;
 	unsigned int i;
 
 	unsigned int w = ctx->dst_fmt.width;
@@ -2462,12 +2310,7 @@ static int rpivid_h265_start(struct rpivid_ctx *ctx)
 	size_t pu_alloc;
 	size_t coeff_alloc;
 
-#if DEBUG_TRACE_P1_CMD
-	p1_z = 0;
-#endif
-
-	// Generate a sanitised WxH for memory alloc
-	// Assume HD if unset
+	/* Generate a sanitised WxH for memory alloc.  Assume HD if unset */
 	if (w == 0)
 		w = 1920;
 	if (w > 4096)
@@ -2477,9 +2320,6 @@ static int rpivid_h265_start(struct rpivid_ctx *ctx)
 	if (h > 4096)
 		h = 4096;
 	wxh = w * h;
-
-	v4l2_info(&dev->v4l2_dev, "%s: (%dx%d)\n", __func__,
-		  ctx->dst_fmt.width, ctx->dst_fmt.height);
 
 	ctx->fatal_err = 0;
 	ctx->dec0 = NULL;
@@ -2494,12 +2334,10 @@ static int rpivid_h265_start(struct rpivid_ctx *ctx)
 		goto fail;
 	}
 
-	// Finger in the air PU & Coeff alloc
-	// Will be realloced if too small
-	coeff_alloc = rpivid_round_up_size(wxh);
-	pu_alloc = rpivid_round_up_size(wxh / 4);
+	coeff_alloc = hevc_d_round_up_size(wxh);
+	pu_alloc = hevc_d_round_up_size(wxh / 4);
 	for (i = 0; i != ARRAY_SIZE(ctx->pu_bufs); ++i) {
-		// Don't actually need a kernel mapping here
+		/* Don't actually need a kernel mapping here */
 		if (gptr_alloc(dev, ctx->pu_bufs + i, pu_alloc,
 			       DMA_ATTR_NO_KERNEL_MAPPING)) {
 			v4l2_err(&dev->v4l2_dev,
@@ -2524,103 +2362,60 @@ fail:
 	return -ENOMEM;
 }
 
-static void rpivid_h265_trigger(struct rpivid_ctx *ctx)
+void hevc_d_h265_trigger(struct hevc_d_ctx *ctx)
 {
-	struct rpivid_dev *const dev = ctx->dev;
-	struct rpivid_dec_env *const de = ctx->dec0;
+	struct hevc_d_dev *const dev = ctx->dev;
+	struct hevc_d_dec_env *const de = ctx->dec0;
+	struct vb2_v4l2_buffer *src_buf;
+	struct media_request *req;
 
-	xtrace_in(dev, de);
+	src_buf = v4l2_m2m_next_src_buf(ctx->fh.m2m_ctx);
+	req = src_buf->vb2_buf.req_obj.req;
 
-	switch (!de ? RPIVID_DECODE_ERROR_CONTINUE : de->state) {
-	case RPIVID_DECODE_SLICE_START:
-		de->state = RPIVID_DECODE_SLICE_CONTINUE;
-		fallthrough;
-	case RPIVID_DECODE_SLICE_CONTINUE:
-		v4l2_m2m_buf_done_and_job_finish(dev->m2m_dev, ctx->fh.m2m_ctx,
-						 VB2_BUF_STATE_DONE);
-		xtrace_ok(dev, de);
-		break;
-
+	switch (!de ? HEVC_D_DECODE_ERROR_DONE : de->state) {
 	default:
 		v4l2_err(&dev->v4l2_dev, "%s: Unexpected state: %d\n", __func__,
 			 de->state);
 		fallthrough;
-	case RPIVID_DECODE_ERROR_DONE:
+	case HEVC_D_DECODE_ERROR_DONE:
 		ctx->dec0 = NULL;
 		dec_env_delete(de);
-		fallthrough;
-	case RPIVID_DECODE_ERROR_CONTINUE:
-		xtrace_fin(dev, de);
 		v4l2_m2m_buf_done_and_job_finish(dev->m2m_dev, ctx->fh.m2m_ctx,
 						 VB2_BUF_STATE_ERROR);
+		media_request_manual_complete(req);
 		break;
 
-	case RPIVID_DECODE_PHASE1:
+	case HEVC_D_DECODE_PHASE1:
 		ctx->dec0 = NULL;
 
-#if !USE_REQUEST_PIN
-		/* Alloc a new request object - needs to be alloced dynamically
-		 * as the media request will release it some random time after
-		 * it is completed
-		 */
-		de->req_obj = kmalloc(sizeof(*de->req_obj), GFP_KERNEL);
-		if (!de->req_obj) {
-			xtrace_fail(dev, de);
-			dec_env_delete(de);
-			v4l2_m2m_buf_done_and_job_finish(dev->m2m_dev,
-							 ctx->fh.m2m_ctx,
-							 VB2_BUF_STATE_ERROR);
-			break;
-		}
-		media_request_object_init(de->req_obj);
-#warning probably needs to _get the req obj too
-#endif
-		ctx->p1idx = (ctx->p1idx + 1 >= RPIVID_P1BUF_COUNT) ?
+		ctx->p1idx = (ctx->p1idx + 1 >= HEVC_D_P1BUF_COUNT) ?
 							0 : ctx->p1idx + 1;
 
 		/* We know we have src & dst so no need to test */
 		de->src_buf = v4l2_m2m_src_buf_remove(ctx->fh.m2m_ctx);
 		de->frame_buf = v4l2_m2m_dst_buf_remove(ctx->fh.m2m_ctx);
-
-#if USE_REQUEST_PIN
-		de->req_pin = de->src_buf->vb2_buf.req_obj.req;
-		media_request_pin(de->req_pin);
-#else
-		media_request_object_bind(de->src_buf->vb2_buf.req_obj.req,
-					  &dst_req_obj_ops, de, false,
-					  de->req_obj);
-#endif
+		de->req_pin = req;
 
 		/* We could get rid of the src buffer here if we've already
 		 * copied it, but we don't copy the last buffer unless it
-		 * didn't return a contig dma addr and that shouldn't happen
+		 * didn't return a contig dma addr, and that shouldn't happen
 		 */
 
 		/* Enable the next setup if our Q isn't too big */
-		if (atomic_add_return(1, &ctx->p1out) < RPIVID_P1BUF_COUNT) {
-			xtrace_fin(dev, de);
+		if (atomic_add_return(1, &ctx->p1out) < HEVC_D_P1BUF_COUNT)
 			v4l2_m2m_job_finish(dev->m2m_dev, ctx->fh.m2m_ctx);
-		}
 
-		rpivid_hw_irq_active1_claim(dev, &de->irq_ent, phase1_claimed,
+		hevc_d_hw_irq_active1_claim(dev, &de->irq_ent, phase1_claimed,
 					    de);
-		xtrace_ok(dev, de);
 		break;
 	}
 }
 
-const struct rpivid_dec_ops rpivid_dec_ops_h265 = {
-	.setup = rpivid_h265_setup,
-	.start = rpivid_h265_start,
-	.stop = rpivid_h265_stop,
-	.trigger = rpivid_h265_trigger,
-};
-
 static int try_ctrl_sps(struct v4l2_ctrl *ctrl)
 {
 	const struct v4l2_ctrl_hevc_sps *const sps = ctrl->p_new.p_hevc_sps;
-	struct rpivid_ctx *const ctx = ctrl->priv;
-	struct rpivid_dev *const dev = ctx->dev;
+	struct hevc_d_ctx *const ctx = ctrl->priv;
+	struct hevc_d_dev *const dev = ctx->dev;
 
 	if (sps->chroma_format_idc != 1) {
 		v4l2_warn(&dev->v4l2_dev,
@@ -2660,8 +2455,10 @@ static int try_ctrl_sps(struct v4l2_ctrl *ctrl)
 		return 0;
 
 	if ((sps->bit_depth_luma_minus8 == 0 &&
+	     ctx->dst_fmt.pixelformat != V4L2_PIX_FMT_NV12MT_COL128 &&
 	     ctx->dst_fmt.pixelformat != V4L2_PIX_FMT_NV12_COL128) ||
 	    (sps->bit_depth_luma_minus8 == 2 &&
+	     ctx->dst_fmt.pixelformat != V4L2_PIX_FMT_NV12MT_10_COL128 &&
 	     ctx->dst_fmt.pixelformat != V4L2_PIX_FMT_NV12_10_COL128)) {
 		v4l2_warn(&dev->v4l2_dev,
 			  "SPS luma depth %d does not match capture format\n",
@@ -2683,15 +2480,15 @@ static int try_ctrl_sps(struct v4l2_ctrl *ctrl)
 	return 0;
 }
 
-const struct v4l2_ctrl_ops rpivid_hevc_sps_ctrl_ops = {
+const struct v4l2_ctrl_ops hevc_d_hevc_sps_ctrl_ops = {
 	.try_ctrl = try_ctrl_sps,
 };
 
 static int try_ctrl_pps(struct v4l2_ctrl *ctrl)
 {
 	const struct v4l2_ctrl_hevc_pps *const pps = ctrl->p_new.p_hevc_pps;
-	struct rpivid_ctx *const ctx = ctrl->priv;
-	struct rpivid_dev *const dev = ctx->dev;
+	struct hevc_d_ctx *const ctx = ctrl->priv;
+	struct hevc_d_dev *const dev = ctx->dev;
 
 	if ((pps->flags &
 	     V4L2_HEVC_PPS_FLAG_ENTROPY_CODING_SYNC_ENABLED) &&
@@ -2706,7 +2503,83 @@ static int try_ctrl_pps(struct v4l2_ctrl *ctrl)
 	return 0;
 }
 
-const struct v4l2_ctrl_ops rpivid_hevc_pps_ctrl_ops = {
+const struct v4l2_ctrl_ops hevc_d_hevc_pps_ctrl_ops = {
 	.try_ctrl = try_ctrl_pps,
 };
 
+void hevc_d_device_run(void *priv)
+{
+	struct hevc_d_ctx *const ctx = priv;
+	struct hevc_d_dev *const dev = ctx->dev;
+	struct hevc_d_run run = {};
+	struct media_request *src_req;
+
+	run.src = v4l2_m2m_next_src_buf(ctx->fh.m2m_ctx);
+	run.dst = v4l2_m2m_next_dst_buf(ctx->fh.m2m_ctx);
+
+	if (!run.src || !run.dst) {
+		v4l2_err(&dev->v4l2_dev, "%s: Missing buffer: src=%p, dst=%p\n",
+			 __func__, run.src, run.dst);
+		goto fail;
+	}
+
+	/* Apply request(s) controls */
+	src_req = run.src->vb2_buf.req_obj.req;
+	if (!src_req) {
+		v4l2_err(&dev->v4l2_dev, "%s: Missing request\n", __func__);
+		goto fail;
+	}
+
+	v4l2_ctrl_request_setup(src_req, &ctx->hdl);
+
+	switch (ctx->src_fmt.pixelformat) {
+	case V4L2_PIX_FMT_HEVC_SLICE:
+	{
+		const struct v4l2_ctrl *ctrl;
+
+		run.h265.sps =
+			hevc_d_find_control_data(ctx,
+						 V4L2_CID_STATELESS_HEVC_SPS);
+		run.h265.pps =
+			hevc_d_find_control_data(ctx,
+						 V4L2_CID_STATELESS_HEVC_PPS);
+		run.h265.dec =
+			hevc_d_find_control_data(ctx,
+						 V4L2_CID_STATELESS_HEVC_DECODE_PARAMS);
+
+		ctrl = hevc_d_find_ctrl(ctx,
+					V4L2_CID_STATELESS_HEVC_SLICE_PARAMS);
+		if (!ctrl || !ctrl->elems) {
+			v4l2_err(&dev->v4l2_dev, "%s: Missing slice params\n",
+				 __func__);
+			goto fail;
+		}
+		run.h265.slice_ents = ctrl->elems;
+		run.h265.slice_params = ctrl->p_cur.p;
+
+		run.h265.scaling_matrix =
+			hevc_d_find_control_data(ctx,
+						 V4L2_CID_STATELESS_HEVC_SCALING_MATRIX);
+		break;
+	}
+
+	default:
+		break;
+	}
+
+	v4l2_m2m_buf_copy_metadata(run.src, run.dst, true);
+
+	hevc_d_h265_setup(ctx, &run);
+
+	/* Complete request(s) controls */
+	v4l2_ctrl_request_complete(src_req, &ctx->hdl);
+
+	hevc_d_h265_trigger(ctx);
+	return;
+
+fail:
+	/* We really shouldn't get here but tidy up what we can */
+	v4l2_m2m_buf_done_and_job_finish(dev->m2m_dev, ctx->fh.m2m_ctx,
+					 VB2_BUF_STATE_ERROR);
+	media_request_manual_complete(src_req);
+}

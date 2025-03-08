@@ -2,7 +2,7 @@
 /*
  * Raspberry Pi HEVC driver
  *
- * Copyright (C) 2020 Raspberry Pi (Trading) Ltd
+ * Copyright (C) 2024 Raspberry Pi Ltd
  *
  * Based on the Cedrus VPU driver, that is:
  *
@@ -20,10 +20,10 @@
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-mem2mem.h>
 
-#include "rpivid.h"
-#include "rpivid_video.h"
-#include "rpivid_hw.h"
-#include "rpivid_dec.h"
+#include "hevc_d.h"
+#include "hevc_d_h265.h"
+#include "hevc_d_video.h"
+#include "hevc_d_hw.h"
 
 /*
  * Default /dev/videoN node number.
@@ -34,34 +34,30 @@ static int video_nr = 19;
 module_param(video_nr, int, 0644);
 MODULE_PARM_DESC(video_nr, "decoder video device number");
 
-static const struct rpivid_control rpivid_ctrls[] = {
+static const struct hevc_d_control hevc_d_ctrls[] = {
 	{
 		.cfg = {
 			.id	= V4L2_CID_STATELESS_HEVC_SPS,
-			.ops	= &rpivid_hevc_sps_ctrl_ops,
+			.ops	= &hevc_d_hevc_sps_ctrl_ops,
 		},
 		.required	= false,
-	},
-	{
+	}, {
 		.cfg = {
 			.id	= V4L2_CID_STATELESS_HEVC_PPS,
-			.ops	= &rpivid_hevc_pps_ctrl_ops,
+			.ops	= &hevc_d_hevc_pps_ctrl_ops,
 		},
 		.required	= false,
-	},
-	{
+	}, {
 		.cfg = {
 			.id = V4L2_CID_STATELESS_HEVC_SCALING_MATRIX,
 		},
 		.required	= false,
-	},
-	{
+	}, {
 		.cfg = {
 			.id	= V4L2_CID_STATELESS_HEVC_DECODE_PARAMS,
 		},
 		.required	= true,
-	},
-	{
+	}, {
 		.cfg = {
 			.name	= "Slice param array",
 			.id	= V4L2_CID_STATELESS_HEVC_SLICE_PARAMS,
@@ -70,17 +66,15 @@ static const struct rpivid_control rpivid_ctrls[] = {
 			.dims	= { 0x1000 },
 		},
 		.required	= true,
-	},
-	{
+	}, {
 		.cfg = {
 			.id	= V4L2_CID_STATELESS_HEVC_DECODE_MODE,
-			.min	= V4L2_STATELESS_HEVC_DECODE_MODE_SLICE_BASED,
-			.max	= V4L2_STATELESS_HEVC_DECODE_MODE_SLICE_BASED,
-			.def	= V4L2_STATELESS_HEVC_DECODE_MODE_SLICE_BASED,
+			.min	= V4L2_STATELESS_HEVC_DECODE_MODE_FRAME_BASED,
+			.max	= V4L2_STATELESS_HEVC_DECODE_MODE_FRAME_BASED,
+			.def	= V4L2_STATELESS_HEVC_DECODE_MODE_FRAME_BASED,
 		},
 		.required	= false,
-	},
-	{
+	}, {
 		.cfg = {
 			.id	= V4L2_CID_STATELESS_HEVC_START_CODE,
 			.min	= V4L2_STATELESS_HEVC_START_CODE_NONE,
@@ -91,53 +85,50 @@ static const struct rpivid_control rpivid_ctrls[] = {
 	},
 };
 
-#define rpivid_ctrls_COUNT	ARRAY_SIZE(rpivid_ctrls)
+#define HEVC_D_CTRLS_COUNT	ARRAY_SIZE(hevc_d_ctrls)
 
-struct v4l2_ctrl *rpivid_find_ctrl(struct rpivid_ctx *ctx, u32 id)
+struct v4l2_ctrl *hevc_d_find_ctrl(struct hevc_d_ctx *ctx, u32 id)
 {
 	unsigned int i;
 
-	for (i = 0; ctx->ctrls[i]; i++)
+	for (i = 0; i < HEVC_D_CTRLS_COUNT; i++)
 		if (ctx->ctrls[i]->id == id)
 			return ctx->ctrls[i];
 
 	return NULL;
 }
 
-void *rpivid_find_control_data(struct rpivid_ctx *ctx, u32 id)
+void *hevc_d_find_control_data(struct hevc_d_ctx *ctx, u32 id)
 {
-	struct v4l2_ctrl *const ctrl = rpivid_find_ctrl(ctx, id);
+	struct v4l2_ctrl *const ctrl = hevc_d_find_ctrl(ctx, id);
 
 	return !ctrl ? NULL : ctrl->p_cur.p;
 }
 
-static int rpivid_init_ctrls(struct rpivid_dev *dev, struct rpivid_ctx *ctx)
+static int hevc_d_init_ctrls(struct hevc_d_dev *dev, struct hevc_d_ctx *ctx)
 {
 	struct v4l2_ctrl_handler *hdl = &ctx->hdl;
 	struct v4l2_ctrl *ctrl;
-	unsigned int ctrl_size;
 	unsigned int i;
 
-	v4l2_ctrl_handler_init(hdl, rpivid_ctrls_COUNT);
+	v4l2_ctrl_handler_init(hdl, HEVC_D_CTRLS_COUNT);
 	if (hdl->error) {
 		v4l2_err(&dev->v4l2_dev,
 			 "Failed to initialize control handler\n");
 		return hdl->error;
 	}
 
-	ctrl_size = sizeof(ctrl) * rpivid_ctrls_COUNT + 1;
-
-	ctx->ctrls = kzalloc(ctrl_size, GFP_KERNEL);
+	ctx->ctrls = kzalloc(HEVC_D_CTRLS_COUNT * sizeof(ctrl), GFP_KERNEL);
 	if (!ctx->ctrls)
 		return -ENOMEM;
 
-	for (i = 0; i < rpivid_ctrls_COUNT; i++) {
-		ctrl = v4l2_ctrl_new_custom(hdl, &rpivid_ctrls[i].cfg,
+	for (i = 0; i < HEVC_D_CTRLS_COUNT; i++) {
+		ctrl = v4l2_ctrl_new_custom(hdl, &hevc_d_ctrls[i].cfg,
 					    ctx);
 		if (hdl->error) {
 			v4l2_err(&dev->v4l2_dev,
 				 "Failed to create new custom control id=%#x\n",
-				 rpivid_ctrls[i].cfg.id);
+				 hevc_d_ctrls[i].cfg.id);
 
 			v4l2_ctrl_handler_free(hdl);
 			kfree(ctx->ctrls);
@@ -153,11 +144,11 @@ static int rpivid_init_ctrls(struct rpivid_dev *dev, struct rpivid_ctx *ctx)
 	return 0;
 }
 
-static int rpivid_request_validate(struct media_request *req)
+static int hevc_d_request_validate(struct media_request *req)
 {
 	struct media_request_object *obj;
 	struct v4l2_ctrl_handler *parent_hdl, *hdl;
-	struct rpivid_ctx *ctx = NULL;
+	struct hevc_d_ctx *ctx = NULL;
 	struct v4l2_ctrl *ctrl_test;
 	unsigned int count;
 	unsigned int i;
@@ -195,16 +186,17 @@ static int rpivid_request_validate(struct media_request *req)
 		return -ENOENT;
 	}
 
-	for (i = 0; i < rpivid_ctrls_COUNT; i++) {
-		if (!rpivid_ctrls[i].required)
+	for (i = 0; i < HEVC_D_CTRLS_COUNT; i++) {
+		if (!hevc_d_ctrls[i].required)
 			continue;
 
 		ctrl_test =
 			v4l2_ctrl_request_hdl_ctrl_find(hdl,
-							rpivid_ctrls[i].cfg.id);
+							hevc_d_ctrls[i].cfg.id);
 		if (!ctrl_test) {
 			v4l2_info(&ctx->dev->v4l2_dev,
-				  "Missing required codec control\n");
+				  "Missing required codec control %d: id=%#x\n",
+				  i, hevc_d_ctrls[i].cfg.id);
 			v4l2_ctrl_request_hdl_put(hdl);
 			return -ENOENT;
 		}
@@ -215,10 +207,10 @@ static int rpivid_request_validate(struct media_request *req)
 	return vb2_request_validate(req);
 }
 
-static int rpivid_open(struct file *file)
+static int hevc_d_open(struct file *file)
 {
-	struct rpivid_dev *dev = video_drvdata(file);
-	struct rpivid_ctx *ctx = NULL;
+	struct hevc_d_dev *dev = video_drvdata(file);
+	struct hevc_d_ctx *ctx = NULL;
 	int ret;
 
 	if (mutex_lock_interruptible(&dev->dev_mutex))
@@ -237,12 +229,12 @@ static int rpivid_open(struct file *file)
 	file->private_data = &ctx->fh;
 	ctx->dev = dev;
 
-	ret = rpivid_init_ctrls(dev, ctx);
+	ret = hevc_d_init_ctrls(dev, ctx);
 	if (ret)
 		goto err_free;
 
 	ctx->fh.m2m_ctx = v4l2_m2m_ctx_init(dev->m2m_dev, ctx,
-					    &rpivid_queue_init);
+					    &hevc_d_queue_init);
 	if (IS_ERR(ctx->fh.m2m_ctx)) {
 		ret = PTR_ERR(ctx->fh.m2m_ctx);
 		goto err_ctrls;
@@ -251,7 +243,7 @@ static int rpivid_open(struct file *file)
 	/* The only bit of format info that we can guess now is H265 src
 	 * Everything else we need more info for
 	 */
-	rpivid_prepare_src_format(&ctx->src_fmt);
+	hevc_d_prepare_src_format(&ctx->src_fmt);
 
 	v4l2_fh_add(&ctx->fh);
 
@@ -261,6 +253,7 @@ static int rpivid_open(struct file *file)
 
 err_ctrls:
 	v4l2_ctrl_handler_free(&ctx->hdl);
+	kfree(ctx->ctrls);
 err_free:
 	mutex_destroy(&ctx->ctx_mutex);
 	kfree(ctx);
@@ -270,11 +263,11 @@ err_unlock:
 	return ret;
 }
 
-static int rpivid_release(struct file *file)
+static int hevc_d_release(struct file *file)
 {
-	struct rpivid_dev *dev = video_drvdata(file);
-	struct rpivid_ctx *ctx = container_of(file->private_data,
-					      struct rpivid_ctx, fh);
+	struct hevc_d_dev *dev = video_drvdata(file);
+	struct hevc_d_ctx *ctx = container_of(file->private_data,
+					      struct hevc_d_ctx, fh);
 
 	mutex_lock(&dev->dev_mutex);
 
@@ -294,37 +287,43 @@ static int rpivid_release(struct file *file)
 	return 0;
 }
 
-static const struct v4l2_file_operations rpivid_fops = {
+static void hevc_d_media_req_queue(struct media_request *req)
+{
+	media_request_mark_manual_completion(req);
+	v4l2_m2m_request_queue(req);
+}
+
+static const struct v4l2_file_operations hevc_d_fops = {
 	.owner		= THIS_MODULE,
-	.open		= rpivid_open,
-	.release	= rpivid_release,
+	.open		= hevc_d_open,
+	.release	= hevc_d_release,
 	.poll		= v4l2_m2m_fop_poll,
 	.unlocked_ioctl	= video_ioctl2,
 	.mmap		= v4l2_m2m_fop_mmap,
 };
 
-static const struct video_device rpivid_video_device = {
-	.name		= RPIVID_NAME,
+static const struct video_device hevc_d_video_device = {
+	.name		= HEVC_D_NAME,
 	.vfl_dir	= VFL_DIR_M2M,
-	.fops		= &rpivid_fops,
-	.ioctl_ops	= &rpivid_ioctl_ops,
+	.fops		= &hevc_d_fops,
+	.ioctl_ops	= &hevc_d_ioctl_ops,
 	.minor		= -1,
 	.release	= video_device_release_empty,
 	.device_caps	= V4L2_CAP_VIDEO_M2M_MPLANE | V4L2_CAP_STREAMING,
 };
 
-static const struct v4l2_m2m_ops rpivid_m2m_ops = {
-	.device_run	= rpivid_device_run,
+static const struct v4l2_m2m_ops hevc_d_m2m_ops = {
+	.device_run	= hevc_d_device_run,
 };
 
-static const struct media_device_ops rpivid_m2m_media_ops = {
-	.req_validate	= rpivid_request_validate,
-	.req_queue	= v4l2_m2m_request_queue,
+static const struct media_device_ops hevc_d_m2m_media_ops = {
+	.req_validate	= hevc_d_request_validate,
+	.req_queue	= hevc_d_media_req_queue,
 };
 
-static int rpivid_probe(struct platform_device *pdev)
+static int hevc_d_probe(struct platform_device *pdev)
 {
-	struct rpivid_dev *dev;
+	struct hevc_d_dev *dev;
 	struct video_device *vfd;
 	int ret;
 
@@ -332,18 +331,16 @@ static int rpivid_probe(struct platform_device *pdev)
 	if (!dev)
 		return -ENOMEM;
 
-	dev->vfd = rpivid_video_device;
+	dev->vfd = hevc_d_video_device;
 	dev->dev = &pdev->dev;
 	dev->pdev = pdev;
 
 	ret = 0;
-	ret = rpivid_hw_probe(dev);
+	ret = hevc_d_hw_probe(dev);
 	if (ret) {
-		dev_err(&pdev->dev, "Failed to probe hardware\n");
+		dev_err(&pdev->dev, "Failed to probe hardware - %d\n", ret);
 		return ret;
 	}
-
-	dev->dec_ops = &rpivid_dec_ops_h265;
 
 	mutex_init(&dev->dev_mutex);
 
@@ -357,7 +354,7 @@ static int rpivid_probe(struct platform_device *pdev)
 	vfd->lock = &dev->dev_mutex;
 	vfd->v4l2_dev = &dev->v4l2_dev;
 
-	snprintf(vfd->name, sizeof(vfd->name), "%s", rpivid_video_device.name);
+	snprintf(vfd->name, sizeof(vfd->name), "%s", hevc_d_video_device.name);
 	video_set_drvdata(vfd, dev);
 
 	ret = dma_set_mask_and_coherent(dev->dev, DMA_BIT_MASK(36));
@@ -367,7 +364,7 @@ static int rpivid_probe(struct platform_device *pdev)
 		goto err_v4l2;
 	}
 
-	dev->m2m_dev = v4l2_m2m_init(&rpivid_m2m_ops);
+	dev->m2m_dev = v4l2_m2m_init(&hevc_d_m2m_ops);
 	if (IS_ERR(dev->m2m_dev)) {
 		v4l2_err(&dev->v4l2_dev,
 			 "Failed to initialize V4L2 M2M device\n");
@@ -377,12 +374,12 @@ static int rpivid_probe(struct platform_device *pdev)
 	}
 
 	dev->mdev.dev = &pdev->dev;
-	strscpy(dev->mdev.model, RPIVID_NAME, sizeof(dev->mdev.model));
-	strscpy(dev->mdev.bus_info, "platform:" RPIVID_NAME,
+	strscpy(dev->mdev.model, HEVC_D_NAME, sizeof(dev->mdev.model));
+	strscpy(dev->mdev.bus_info, "platform:" HEVC_D_NAME,
 		sizeof(dev->mdev.bus_info));
 
 	media_device_init(&dev->mdev);
-	dev->mdev.ops = &rpivid_m2m_media_ops;
+	dev->mdev.ops = &hevc_d_m2m_media_ops;
 	dev->v4l2_dev.mdev = &dev->mdev;
 
 	ret = video_register_device(vfd, VFL_TYPE_VIDEO, video_nr);
@@ -424,9 +421,9 @@ err_v4l2:
 	return ret;
 }
 
-static void rpivid_remove(struct platform_device *pdev)
+static void hevc_d_remove(struct platform_device *pdev)
 {
-	struct rpivid_dev *dev = platform_get_drvdata(pdev);
+	struct hevc_d_dev *dev = platform_get_drvdata(pdev);
 
 	if (media_devnode_is_registered(dev->mdev.devnode)) {
 		media_device_unregister(&dev->mdev);
@@ -438,27 +435,25 @@ static void rpivid_remove(struct platform_device *pdev)
 	video_unregister_device(&dev->vfd);
 	v4l2_device_unregister(&dev->v4l2_dev);
 
-	rpivid_hw_remove(dev);
+	hevc_d_hw_remove(dev);
 }
 
-static const struct of_device_id rpivid_dt_match[] = {
-	{
-		.compatible = "raspberrypi,rpivid-vid-decoder",
-	},
+static const struct of_device_id hevc_d_dt_match[] = {
+	{ .compatible = "raspberrypi,hevc-dec", },
 	{ /* sentinel */ }
 };
-MODULE_DEVICE_TABLE(of, rpivid_dt_match);
+MODULE_DEVICE_TABLE(of, hevc_d_dt_match);
 
-static struct platform_driver rpivid_driver = {
-	.probe		= rpivid_probe,
-	.remove		= rpivid_remove,
+static struct platform_driver hevc_d_driver = {
+	.probe		= hevc_d_probe,
+	.remove		= hevc_d_remove,
 	.driver		= {
-		.name = RPIVID_NAME,
-		.of_match_table	= of_match_ptr(rpivid_dt_match),
+		.name = HEVC_D_NAME,
+		.of_match_table	= of_match_ptr(hevc_d_dt_match),
 	},
 };
-module_platform_driver(rpivid_driver);
+module_platform_driver(hevc_d_driver);
 
-MODULE_LICENSE("GPL v2");
-MODULE_AUTHOR("John Cox <jc@kynesim.co.uk>");
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("John Cox <john.cox@raspberrypi.com>");
 MODULE_DESCRIPTION("Raspberry Pi HEVC V4L2 driver");

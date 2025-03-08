@@ -2,7 +2,7 @@
 /*
  * Raspberry Pi HEVC driver
  *
- * Copyright (C) 2020 Raspberry Pi (Trading) Ltd
+ * Copyright (C) 2024 Raspberry Pi Ltd
  *
  * Based on the Cedrus VPU driver, that is:
  *
@@ -11,10 +11,10 @@
  * Copyright (C) 2018 Bootlin
  */
 
-#ifndef _RPIVID_VIDEO_H_
-#define _RPIVID_VIDEO_H_
+#ifndef _HEVC_D_VIDEO_H_
+#define _HEVC_D_VIDEO_H_
 
-struct rpivid_format {
+struct hevc_d_format {
 	u32		pixelformat;
 	u32		directions;
 	unsigned int	capabilities;
@@ -22,17 +22,17 @@ struct rpivid_format {
 
 static inline int is_sps_set(const struct v4l2_ctrl_hevc_sps * const sps)
 {
-	return sps && sps->pic_width_in_luma_samples != 0;
+	return sps && sps->pic_width_in_luma_samples;
 }
 
-extern const struct v4l2_ioctl_ops rpivid_ioctl_ops;
+extern const struct v4l2_ioctl_ops hevc_d_ioctl_ops;
 
-int rpivid_queue_init(void *priv, struct vb2_queue *src_vq,
+int hevc_d_queue_init(void *priv, struct vb2_queue *src_vq,
 		      struct vb2_queue *dst_vq);
 
-size_t rpivid_bit_buf_size(unsigned int w, unsigned int h, unsigned int bits_minus8);
-size_t rpivid_round_up_size(const size_t x);
+size_t hevc_d_bit_buf_size(unsigned int w, unsigned int h, unsigned int bits_minus8);
+size_t hevc_d_round_up_size(const size_t x);
 
-void rpivid_prepare_src_format(struct v4l2_pix_format_mplane *pix_fmt);
+void hevc_d_prepare_src_format(struct v4l2_pix_format_mplane *pix_fmt);
 
 #endif
